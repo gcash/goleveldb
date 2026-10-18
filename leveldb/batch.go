@@ -323,6 +323,12 @@ func decodeBatchToMem(data []byte, expectSeq uint64, mdb *memdb.DB) (seq uint64,
 	if seq < expectSeq {
 		return 0, 0, newErrBatchCorrupted("invalid sequence number")
 	}
+	// Past the 56-bit internal key, makeInternalKey panics and recovery
+	// cannot skip the batch.  Check the whole batch before inserting any of
+	// it, including the sequence recovery moves the DB to after it.
+	if seq > keyMaxSeq || uint64(batchLen) > keyMaxSeq-seq {
+		return 0, 0, newErrBatchCorrupted("invalid sequence number")
+	}
 	data = data[batchHeaderLen:]
 	var ik []byte
 	var decodedLen int

@@ -13,6 +13,8 @@ import (
 	"testing"
 	"testing/quick"
 
+	"github.com/gcash/goleveldb/leveldb/errors"
+	"github.com/gcash/goleveldb/leveldb/memdb"
 	"github.com/gcash/goleveldb/leveldb/testutil"
 )
 
@@ -175,4 +177,43 @@ func benchmarkBatchWrite(b *testing.B, config *BatchConfig) {
 		}
 	}
 	b.ReportAllocs()
+}
+
+func TestDecodeBatchToMemRejectsSequencePastInternalKey(t *testing.T) {
+	put := func(seq uint64, keys ...string) []byte {
+		b := new(Batch)
+		for _, key := range keys {
+			b.Put([]byte(key), []byte("v"))
+		}
+		return append(encodeBatchHeader(nil, seq, b.Len()), b.data...)
+	}
+
+	for _, test := range []struct {
+		name string
+		seq  uint64
+		keys []string
+	}{
+		{"header sequence", keyMaxSeq + 1, []string{"k"}},
+		{"second record", keyMaxSeq, []string{"a", "b"}},
+		// Recovery sets the DB's sequence to the batch's plus its length.
+		{"sequence after recovery", keyMaxSeq, []string{"k"}},
+	} {
+		mdb := memdb.New(defaultIComparer, 1<<20)
+		if _, _, err := decodeBatchToMem(put(test.seq, test.keys...), 0, mdb); !errors.IsCorrupted(err) {
+			t.Errorf("%s: err = %v", test.name, err)
+		}
+		// The whole batch is rejected, not only the records past the end.
+		if n := mdb.Len(); n != 0 {
+			t.Errorf("%s: %d records inserted", test.name, n)
+		}
+	}
+
+	for _, wantSeq := range []uint64{7, keyMaxSeq - 1} {
+		mdb := memdb.New(defaultIComparer, 1<<20)
+		seq, n, err := decodeBatchToMem(put(wantSeq, "k"), 0, mdb)
+		if err != nil || seq != wantSeq || n != 1 || mdb.Len() != 1 {
+			t.Errorf("seq %d: seq=%d n=%d len=%d err=%v", wantSeq, seq, n,
+				mdb.Len(), err)
+		}
+	}
 }
