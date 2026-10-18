@@ -15,7 +15,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"strings"
 	"testing"
@@ -84,7 +83,7 @@ func testGenerator(t *testing.T, reset func(), gen func() (string, bool)) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		x, err := ioutil.ReadAll(rr)
+		x, err := io.ReadAll(rr)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -232,7 +231,7 @@ func TestFlush(t *testing.T) {
 	wants := []int64{1, 2, 10000, 40000}
 	for i, want := range wants {
 		rr, _ := r.Next()
-		n, err := io.Copy(ioutil.Discard, rr)
+		n, err := io.Copy(io.Discard, rr)
 		if err != nil {
 			t.Fatalf("read #%d: %v", i, err)
 		}
@@ -402,7 +401,7 @@ func TestCorrupt_MissingLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -415,7 +414,7 @@ func TestCorrupt_MissingLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.Copy(ioutil.Discard, rr)
+	_, err = io.Copy(io.Discard, rr)
 	if err != io.ErrUnexpectedEOF {
 		t.Fatalf("read #1: unexpected error: %v", err)
 	}
@@ -483,7 +482,7 @@ func TestCorrupt_CorruptedFirstBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -496,7 +495,7 @@ func TestCorrupt_CorruptedFirstBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err = io.Copy(ioutil.Discard, rr)
+	n, err = io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #1: %v", err)
 	}
@@ -567,7 +566,7 @@ func TestCorrupt_CorruptedMiddleBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -580,7 +579,7 @@ func TestCorrupt_CorruptedMiddleBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.Copy(ioutil.Discard, rr)
+	_, err = io.Copy(io.Discard, rr)
 	if err != io.ErrUnexpectedEOF {
 		t.Fatalf("read #1: unexpected error: %v", err)
 	}
@@ -590,7 +589,7 @@ func TestCorrupt_CorruptedMiddleBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err = io.Copy(ioutil.Discard, rr)
+	n, err = io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #2: %v", err)
 	}
@@ -661,7 +660,7 @@ func TestCorrupt_CorruptedLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -674,7 +673,7 @@ func TestCorrupt_CorruptedLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err = io.Copy(ioutil.Discard, rr)
+	n, err = io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #1: %v", err)
 	}
@@ -687,7 +686,7 @@ func TestCorrupt_CorruptedLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err = io.Copy(ioutil.Discard, rr)
+	n, err = io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #2: %v", err)
 	}
@@ -700,7 +699,7 @@ func TestCorrupt_CorruptedLastBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.Copy(ioutil.Discard, rr)
+	_, err = io.Copy(io.Discard, rr)
 	if err != io.ErrUnexpectedEOF {
 		t.Fatalf("read #3: unexpected error: %v", err)
 	}
@@ -758,7 +757,7 @@ func TestCorrupt_FirstChuckLengthOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -771,7 +770,7 @@ func TestCorrupt_FirstChuckLengthOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = io.Copy(ioutil.Discard, rr)
+	_, err = io.Copy(io.Discard, rr)
 	if err != io.ErrUnexpectedEOF {
 		t.Fatalf("read #1: unexpected error: %v", err)
 	}
@@ -829,7 +828,7 @@ func TestCorrupt_MiddleChuckLengthOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err := io.Copy(ioutil.Discard, rr)
+	n, err := io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #0: %v", err)
 	}
@@ -842,7 +841,7 @@ func TestCorrupt_MiddleChuckLengthOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n, err = io.Copy(ioutil.Discard, rr)
+	n, err = io.Copy(io.Discard, rr)
 	if err != nil {
 		t.Fatalf("read #1: %v", err)
 	}

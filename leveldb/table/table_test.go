@@ -24,15 +24,15 @@ type tableWrapper struct {
 }
 
 func (t tableWrapper) TestFind(key []byte) (rkey, rvalue []byte, err error) {
-	return t.Reader.Find(key, false, nil)
+	return t.Find(key, false, nil)
 }
 
 func (t tableWrapper) TestGet(key []byte) (value []byte, err error) {
-	return t.Reader.Get(key, nil)
+	return t.Get(key, nil)
 }
 
 func (t tableWrapper) TestNewIterator(slice *util.Range) iterator.Iterator {
-	return t.Reader.NewIterator(slice, nil)
+	return t.NewIterator(slice, nil)
 }
 
 var _ = testutil.Defer(func() {

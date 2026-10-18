@@ -196,8 +196,9 @@ func (h *dbCorruptHarness) check(min, max int) {
 	var n, badk, badv, missed, good int
 	iter := db.NewIterator(nil, p.ro)
 	for iter.Next() {
+		// A key that does not parse is read as 0.
 		k := 0
-		fmt.Sscanf(string(iter.Key()), "%d", &k)
+		_, _ = fmt.Sscanf(string(iter.Key()), "%d", &k)
 		if k < n {
 			badk++
 			continue

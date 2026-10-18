@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega"
 
 	"github.com/gcash/goleveldb/leveldb/iterator"
 )
@@ -99,9 +99,9 @@ func (t *IteratorTesting) IsLast() bool {
 func (t *IteratorTesting) TestKV() {
 	t.init()
 	key, value := t.Index(t.Pos)
-	Expect(t.Iter.Key()).NotTo(BeNil())
-	Expect(t.Iter.Key()).Should(Equal(key), "Key is invalid, %s", t.text())
-	Expect(t.Iter.Value()).Should(Equal(value), "Value for key %q, %s", key, t.text())
+	gomega.Expect(t.Iter.Key()).NotTo(gomega.BeNil())
+	gomega.Expect(t.Iter.Key()).Should(gomega.Equal(key), "Key is invalid, %s", t.text())
+	gomega.Expect(t.Iter.Value()).Should(gomega.Equal(value), "Value for key %q, %s", key, t.text())
 }
 
 func (t *IteratorTesting) First() {
@@ -109,14 +109,14 @@ func (t *IteratorTesting) First() {
 	t.setAct(IterFirst)
 
 	ok := t.Iter.First()
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
 	if t.Len() > 0 {
 		t.Pos = 0
-		Expect(ok).Should(BeTrue(), t.Text())
+		gomega.Expect(ok).Should(gomega.BeTrue(), t.Text())
 		t.TestKV()
 	} else {
 		t.Pos = -1
-		Expect(ok).ShouldNot(BeTrue(), t.Text())
+		gomega.Expect(ok).ShouldNot(gomega.BeTrue(), t.Text())
 	}
 	t.post()
 }
@@ -126,14 +126,14 @@ func (t *IteratorTesting) Last() {
 	t.setAct(IterLast)
 
 	ok := t.Iter.Last()
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
 	if t.Len() > 0 {
 		t.Pos = t.Len() - 1
-		Expect(ok).Should(BeTrue(), t.Text())
+		gomega.Expect(ok).Should(gomega.BeTrue(), t.Text())
 		t.TestKV()
 	} else {
 		t.Pos = 0
-		Expect(ok).ShouldNot(BeTrue(), t.Text())
+		gomega.Expect(ok).ShouldNot(gomega.BeTrue(), t.Text())
 	}
 	t.post()
 }
@@ -143,14 +143,14 @@ func (t *IteratorTesting) Next() {
 	t.setAct(IterNext)
 
 	ok := t.Iter.Next()
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
 	if t.Pos < t.Len()-1 {
 		t.Pos++
-		Expect(ok).Should(BeTrue(), t.Text())
+		gomega.Expect(ok).Should(gomega.BeTrue(), t.Text())
 		t.TestKV()
 	} else {
 		t.Pos = t.Len()
-		Expect(ok).ShouldNot(BeTrue(), t.Text())
+		gomega.Expect(ok).ShouldNot(gomega.BeTrue(), t.Text())
 	}
 	t.post()
 }
@@ -160,14 +160,14 @@ func (t *IteratorTesting) Prev() {
 	t.setAct(IterPrev)
 
 	ok := t.Iter.Prev()
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
 	if t.Pos > 0 {
 		t.Pos--
-		Expect(ok).Should(BeTrue(), t.Text())
+		gomega.Expect(ok).Should(gomega.BeTrue(), t.Text())
 		t.TestKV()
 	} else {
 		t.Pos = -1
-		Expect(ok).ShouldNot(BeTrue(), t.Text())
+		gomega.Expect(ok).ShouldNot(gomega.BeTrue(), t.Text())
 	}
 	t.post()
 }
@@ -180,8 +180,8 @@ func (t *IteratorTesting) Seek(i int) {
 	oldKey, _ := t.IndexOrNil(t.Pos)
 
 	ok := t.Iter.Seek(key)
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
-	Expect(ok).Should(BeTrue(), fmt.Sprintf("Seek from key %q to %q, to pos %d, %s", oldKey, key, i, t.text()))
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
+	gomega.Expect(ok).Should(gomega.BeTrue(), fmt.Sprintf("Seek from key %q to %q, to pos %d, %s", oldKey, key, i, t.text()))
 
 	t.Pos = i
 	t.TestKV()
@@ -200,8 +200,8 @@ func (t *IteratorTesting) SeekInexact(i int) {
 	oldKey, _ := t.IndexOrNil(t.Pos)
 
 	ok := t.Iter.Seek(key)
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
-	Expect(ok).Should(BeTrue(), fmt.Sprintf("Seek from key %q to %q (%q), to pos %d, %s", oldKey, key, key1, i, t.text()))
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
+	gomega.Expect(ok).Should(gomega.BeTrue(), fmt.Sprintf("Seek from key %q to %q (%q), to pos %d, %s", oldKey, key, key1, i, t.text()))
 
 	t.Pos = i
 	t.TestKV()
@@ -215,14 +215,14 @@ func (t *IteratorTesting) SeekKey(key []byte) {
 	i := t.Search(key)
 
 	ok := t.Iter.Seek(key)
-	Expect(t.Iter.Error()).ShouldNot(HaveOccurred())
+	gomega.Expect(t.Iter.Error()).ShouldNot(gomega.HaveOccurred())
 	if i < t.Len() {
 		key_, _ := t.Index(i)
-		Expect(ok).Should(BeTrue(), fmt.Sprintf("Seek from key %q to %q (%q), to pos %d, %s", oldKey, key, key_, i, t.text()))
+		gomega.Expect(ok).Should(gomega.BeTrue(), fmt.Sprintf("Seek from key %q to %q (%q), to pos %d, %s", oldKey, key, key_, i, t.text()))
 		t.Pos = i
 		t.TestKV()
 	} else {
-		Expect(ok).ShouldNot(BeTrue(), fmt.Sprintf("Seek from key %q to %q, %s", oldKey, key, t.text()))
+		gomega.Expect(ok).ShouldNot(gomega.BeTrue(), fmt.Sprintf("Seek from key %q to %q, %s", oldKey, key, t.text()))
 	}
 
 	t.Pos = i
@@ -232,7 +232,7 @@ func (t *IteratorTesting) SeekKey(key []byte) {
 func (t *IteratorTesting) SOI() {
 	t.init()
 	t.setAct(IterSOI)
-	Expect(t.Pos).Should(BeNumerically("<=", 0), t.Text())
+	gomega.Expect(t.Pos).Should(gomega.BeNumerically("<=", 0), t.Text())
 	for i := 0; i < 3; i++ {
 		t.Prev()
 	}
@@ -242,7 +242,7 @@ func (t *IteratorTesting) SOI() {
 func (t *IteratorTesting) EOI() {
 	t.init()
 	t.setAct(IterEOI)
-	Expect(t.Pos).Should(BeNumerically(">=", t.Len()-1), t.Text())
+	gomega.Expect(t.Pos).Should(gomega.BeNumerically(">=", t.Len()-1), t.Text())
 	for i := 0; i < 3; i++ {
 		t.Next()
 	}
@@ -253,7 +253,7 @@ func (t *IteratorTesting) WalkPrev(fn func(t *IteratorTesting)) {
 	t.init()
 	for old := t.Pos; t.Pos > 0; old = t.Pos {
 		fn(t)
-		Expect(t.Pos).Should(BeNumerically("<", old), t.Text())
+		gomega.Expect(t.Pos).Should(gomega.BeNumerically("<", old), t.Text())
 	}
 }
 
@@ -261,7 +261,7 @@ func (t *IteratorTesting) WalkNext(fn func(t *IteratorTesting)) {
 	t.init()
 	for old := t.Pos; t.Pos < t.Len()-1; old = t.Pos {
 		fn(t)
-		Expect(t.Pos).Should(BeNumerically(">", old), t.Text())
+		gomega.Expect(t.Pos).Should(gomega.BeNumerically(">", old), t.Text())
 	}
 }
 

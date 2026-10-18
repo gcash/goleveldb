@@ -17,7 +17,7 @@ import (
 	"strings"
 	"sync"
 
-	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega"
 
 	"github.com/gcash/goleveldb/leveldb/storage"
 )
@@ -368,7 +368,7 @@ func (s *Storage) GetMeta() (fd storage.FileDesc, err error) {
 }
 
 func (s *Storage) SetMeta(fd storage.FileDesc) error {
-	ExpectWithOffset(1, fd.Type).To(Equal(storage.TypeManifest))
+	gomega.ExpectWithOffset(1, fd.Type).To(gomega.Equal(storage.TypeManifest))
 	err := s.Storage.SetMeta(fd)
 	if err != nil {
 		s.logI("set meta failed, fd=%s err=%v", fd, err)
@@ -387,7 +387,7 @@ func (s *Storage) fileClose(fd storage.FileDesc, closer io.Closer) (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err == nil {
-		ExpectWithOffset(2, s.opens).To(HaveKey(x), "File closed, fd=%s", fd)
+		gomega.ExpectWithOffset(2, s.opens).To(gomega.HaveKey(x), "File closed, fd=%s", fd)
 		err = closer.Close()
 	}
 	s.countNB(ModeClose, fd.Type, 0)
@@ -403,7 +403,7 @@ func (s *Storage) fileClose(fd storage.FileDesc, closer io.Closer) (err error) {
 
 func (s *Storage) assertOpen(fd storage.FileDesc) {
 	x := packFile(fd)
-	ExpectWithOffset(2, s.opens).NotTo(HaveKey(x), "File open, fd=%s writer=%v", fd, s.opens[x])
+	gomega.ExpectWithOffset(2, s.opens).NotTo(gomega.HaveKey(x), "File open, fd=%s writer=%v", fd, s.opens[x])
 }
 
 func (s *Storage) Open(fd storage.FileDesc) (r storage.Reader, err error) {
@@ -523,7 +523,7 @@ func (s *Storage) openFiles() string {
 func (s *Storage) CloseCheck() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ExpectWithOffset(1, s.opens).To(BeEmpty(), s.openFiles())
+	gomega.ExpectWithOffset(1, s.opens).To(gomega.BeEmpty(), s.openFiles())
 }
 
 func (s *Storage) OnClose(onClose func() (preserve bool, err error)) {
@@ -535,7 +535,7 @@ func (s *Storage) OnClose(onClose func() (preserve bool, err error)) {
 func (s *Storage) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ExpectWithOffset(1, s.opens).To(BeEmpty(), s.openFiles())
+	gomega.ExpectWithOffset(1, s.opens).To(gomega.BeEmpty(), s.openFiles())
 	err := s.Storage.Close()
 	if err != nil {
 		s.logI("storage closing failed, err=%v", err)
@@ -672,7 +672,7 @@ func NewStorage() *Storage {
 			path = filepath.Join(os.TempDir(), fmt.Sprintf("goleveldb-test%d0%d0%d", os.Getuid(), os.Getpid(), num))
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				stor, err = storage.OpenFile(path, false)
-				ExpectWithOffset(1, err).NotTo(HaveOccurred(), "creating storage at %s", path)
+				gomega.ExpectWithOffset(1, err).NotTo(gomega.HaveOccurred(), "creating storage at %s", path)
 				break
 			}
 		}

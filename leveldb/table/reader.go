@@ -255,10 +255,11 @@ func (i *blockIter) Next() bool {
 		return false
 	}
 
-	if i.dir == dirSOI {
+	switch i.dir {
+	case dirSOI:
 		i.restartIndex = i.riStart
 		i.offset = i.offsetStart
-	} else if i.dir == dirBackward {
+	case dirBackward:
 		i.prevNode = i.prevNode[:0]
 		i.prevKeys = i.prevKeys[:0]
 	}
@@ -501,7 +502,7 @@ func (i *indexIter) Get() iterator.Iterator {
 	}
 
 	var slice *util.Range
-	if i.slice != nil && (i.blockIter.isFirst() || i.blockIter.isLast()) {
+	if i.slice != nil && (i.isFirst() || i.isLast()) {
 		slice = i.slice
 	}
 	return i.tr.getDataIterErr(dataBH, slice, i.tr.verifyChecksum, i.fillCache)

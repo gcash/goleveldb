@@ -8,7 +8,6 @@ package storage
 
 import (
 	"fmt"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -57,7 +56,7 @@ var invalidCases = []string{
 }
 
 func tempDir(t *testing.T) string {
-	dir, err := ioutil.TempDir("", "goleveldb-")
+	dir, err := os.MkdirTemp("", "goleveldb-")
 	if err != nil {
 		t.Fatal(t)
 	}
@@ -241,7 +240,7 @@ func TestFileStorage_Meta(t *testing.T) {
 			if cur.corrupt {
 				content = content[:len(content)-1-rand.Intn(3)]
 			}
-			if err := ioutil.WriteFile(filepath.Join(temp, curName), []byte(content), 0644); err != nil {
+			if err := os.WriteFile(filepath.Join(temp, curName), []byte(content), 0644); err != nil {
 				t.Fatal(err)
 			}
 			if cur.manifest {
@@ -274,7 +273,7 @@ func TestFileStorage_Meta(t *testing.T) {
 			if ret.Num != tc.expect {
 				t.Fatalf("invalid num, expect=%d got=%d", tc.expect, ret.Num)
 			}
-			fis, err := ioutil.ReadDir(temp)
+			fis, err := os.ReadDir(temp)
 			if err != nil {
 				t.Fatal(err)
 			}

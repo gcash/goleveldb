@@ -1,6 +1,6 @@
 module github.com/gcash/goleveldb
 
-go 1.14
+go 1.16
 
 require (
 	github.com/fsnotify/fsnotify v1.5.4 // indirect

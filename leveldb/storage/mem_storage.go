@@ -208,7 +208,7 @@ func (mw *memWriter) Close() error {
 	if mw.closed {
 		return ErrClosed
 	}
-	mw.memFile.open = false
+	mw.open = false
 	return nil
 }
 

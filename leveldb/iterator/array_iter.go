@@ -158,7 +158,7 @@ type arrayIteratorIndexer struct {
 
 func (i *arrayIteratorIndexer) Get() Iterator {
 	if i.Valid() {
-		return i.array.Get(i.basicArrayIterator.pos)
+		return i.array.Get(i.pos)
 	}
 	return nil
 }

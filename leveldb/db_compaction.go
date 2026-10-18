@@ -287,7 +287,8 @@ func (db *DB) memCompaction() {
 	resumeC := make(chan struct{})
 	select {
 	case db.tcompPauseC <- (chan<- struct{})(resumeC):
-	case <-db.compPerErrC:
+	case err := <-db.compPerErrC:
+		db.logf("memdb@flush not pausing table compaction (persistent error %q)", err)
 		close(resumeC)
 		resumeC = nil
 	case <-db.closeC:

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"math/rand"
 
-	. "github.com/onsi/gomega"
+	"github.com/onsi/gomega"
 
 	"github.com/gcash/goleveldb/leveldb/errors"
 	"github.com/gcash/goleveldb/leveldb/iterator"
@@ -103,8 +103,8 @@ func (t *DBTesting) Text() string {
 
 func (t *DBTesting) TestPresentKV(key, value []byte) {
 	rvalue, err := t.DB.TestGet(key)
-	Expect(err).ShouldNot(HaveOccurred(), "Get on key %q, %s", key, t.text())
-	Expect(rvalue).Should(Equal(value), "Value for key %q, %s", key, t.text())
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred(), "Get on key %q, %s", key, t.text())
+	gomega.Expect(rvalue).Should(gomega.Equal(value), "Value for key %q, %s", key, t.text())
 }
 
 func (t *DBTesting) TestAllPresent() {
@@ -115,7 +115,7 @@ func (t *DBTesting) TestAllPresent() {
 
 func (t *DBTesting) TestDeletedKey(key []byte) {
 	_, err := t.DB.TestGet(key)
-	Expect(err).Should(Equal(errors.ErrNotFound), "Get on deleted key %q, %s", key, t.text())
+	gomega.Expect(err).Should(gomega.Equal(errors.ErrNotFound), "Get on deleted key %q, %s", key, t.text())
 }
 
 func (t *DBTesting) TestAllDeleted() {
@@ -145,7 +145,7 @@ func (t *DBTesting) Put(key, value []byte) {
 	}
 	t.Deleted.Delete(key)
 	err := t.DB.TestPut(key, value)
-	Expect(err).ShouldNot(HaveOccurred(), t.Text())
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred(), t.Text())
 	t.TestPresentKV(key, value)
 	t.post()
 }
@@ -168,7 +168,7 @@ func (t *DBTesting) Delete(key []byte) {
 		t.setAct(DBDeleteNA, key)
 	}
 	err := t.DB.TestDelete(key)
-	Expect(err).ShouldNot(HaveOccurred(), t.Text())
+	gomega.Expect(err).ShouldNot(gomega.HaveOccurred(), t.Text())
 	t.TestDeletedKey(key)
 	t.post()
 }
@@ -209,7 +209,7 @@ func DoDBTesting(t *DBTesting) {
 	// Additional iterator testing
 	if db, ok := t.DB.(NewIterator); ok {
 		iter := db.TestNewIterator(nil)
-		Expect(iter.Error()).NotTo(HaveOccurred())
+		gomega.Expect(iter.Error()).NotTo(gomega.HaveOccurred())
 
 		it := IteratorTesting{
 			KeyValue: t.Present,

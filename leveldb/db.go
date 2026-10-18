@@ -844,9 +844,10 @@ func (db *DB) has(auxm *memdb.DB, auxt tFiles, key []byte, seq uint64, ro *opt.R
 		// Trigger table compaction.
 		db.compTrigger(db.tcompCmdC)
 	}
-	if err == nil {
+	switch err {
+	case nil:
 		ret = true
-	} else if err == ErrNotFound {
+	case ErrNotFound:
 		err = nil
 	}
 	return
@@ -931,6 +932,7 @@ func (db *DB) GetSnapshot() (*Snapshot, error) {
 // GetProperty returns value of the given property name.
 //
 // Property names:
+//
 //	leveldb.num-files-at-level{n}
 //		Returns the number of files at level 'n'.
 //	leveldb.stats

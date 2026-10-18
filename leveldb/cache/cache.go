@@ -100,9 +100,10 @@ type mBucket struct {
 func (b *mBucket) freeze() mNodes {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.state == bucketInitialized {
+	switch b.state {
+	case bucketInitialized:
 		b.state = bucketFrozen
-	} else if b.state == bucketUninitialized {
+	case bucketUninitialized:
 		panic("BUG: freeze uninitialized bucket")
 	}
 	return b.nodes
