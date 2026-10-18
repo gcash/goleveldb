@@ -1,11 +1,22 @@
-linters-settings:
-  gocritic:
-    disabled-checks:
-      - ifElseChain
-      - elseif
+version: "2"
 
 linters:
   enable:
-    - gofmt
     - gocritic
     - unconvert
+  settings:
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - elseif
+  # The exclusions golangci-lint v1 applied by default.
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt

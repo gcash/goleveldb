@@ -1,11 +1,11 @@
 This is an implementation of the [LevelDB key/value database](https://github.com/google/leveldb) in the [Go programming language](https://go.dev).
 
-[![Build Status](https://app.travis-ci.com/syndtr/goleveldb.svg?branch=master)](https://app.travis-ci.com/syndtr/goleveldb)
+[![Build Status](https://github.com/gcash/goleveldb/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/gcash/goleveldb/actions/workflows/ci.yml)
 
 Installation
 -----------
 
-	go get github.com/syndtr/goleveldb/leveldb
+	go get github.com/gcash/goleveldb/leveldb
 
 Requirements
 -----------
@@ -104,4 +104,4 @@ defer db.Close()
 Documentation
 -----------
 
-You can read package documentation [here](https://pkg.go.dev/github.com/syndtr/goleveldb).
+You can read package documentation [here](https://pkg.go.dev/github.com/gcash/goleveldb).

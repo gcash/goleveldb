@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/syndtr/goleveldb/leveldb/iterator"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/syndtr/goleveldb/leveldb/util"
+	"github.com/gcash/goleveldb/leveldb/iterator"
+	"github.com/gcash/goleveldb/leveldb/opt"
+	"github.com/gcash/goleveldb/leveldb/util"
 )
 
 var errTransactionDone = errors.New("leveldb: transaction already closed")
@@ -230,6 +230,10 @@ func (tr *Transaction) Commit() error {
 		}
 		tr.stats.stopTimer()
 		if cerr != nil {
+			// Release the compaction commit lock, or every later commit
+			// and compaction blocks on it, and Close with them.
+			tr.db.compCommitLk.Unlock()
+
 			// Return error, lets user decide either to retry or discard
 			// transaction.
 			return cerr

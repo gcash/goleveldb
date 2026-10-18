@@ -16,14 +16,14 @@ import (
 
 	"github.com/golang/snappy"
 
-	"github.com/syndtr/goleveldb/leveldb/cache"
-	"github.com/syndtr/goleveldb/leveldb/comparer"
-	"github.com/syndtr/goleveldb/leveldb/errors"
-	"github.com/syndtr/goleveldb/leveldb/filter"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/syndtr/goleveldb/leveldb/storage"
-	"github.com/syndtr/goleveldb/leveldb/util"
+	"github.com/gcash/goleveldb/leveldb/cache"
+	"github.com/gcash/goleveldb/leveldb/comparer"
+	"github.com/gcash/goleveldb/leveldb/errors"
+	"github.com/gcash/goleveldb/leveldb/filter"
+	"github.com/gcash/goleveldb/leveldb/iterator"
+	"github.com/gcash/goleveldb/leveldb/opt"
+	"github.com/gcash/goleveldb/leveldb/storage"
+	"github.com/gcash/goleveldb/leveldb/util"
 )
 
 // Reader errors.

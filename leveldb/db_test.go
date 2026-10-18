@@ -25,14 +25,14 @@ import (
 
 	"github.com/onsi/gomega"
 
-	"github.com/syndtr/goleveldb/leveldb/comparer"
-	"github.com/syndtr/goleveldb/leveldb/errors"
-	"github.com/syndtr/goleveldb/leveldb/filter"
-	"github.com/syndtr/goleveldb/leveldb/iterator"
-	"github.com/syndtr/goleveldb/leveldb/opt"
-	"github.com/syndtr/goleveldb/leveldb/storage"
-	"github.com/syndtr/goleveldb/leveldb/testutil"
-	"github.com/syndtr/goleveldb/leveldb/util"
+	"github.com/gcash/goleveldb/leveldb/comparer"
+	"github.com/gcash/goleveldb/leveldb/errors"
+	"github.com/gcash/goleveldb/leveldb/filter"
+	"github.com/gcash/goleveldb/leveldb/iterator"
+	"github.com/gcash/goleveldb/leveldb/opt"
+	"github.com/gcash/goleveldb/leveldb/storage"
+	"github.com/gcash/goleveldb/leveldb/testutil"
+	"github.com/gcash/goleveldb/leveldb/util"
 )
 
 func tkey(i int) []byte {
@@ -1516,6 +1516,43 @@ func TestDB_ManifestWriteError(t *testing.T) {
 			h.getVal("foo", "bar")
 		}()
 	}
+}
+
+// TestDB_TransactionManifestWriteError ensures a transaction whose commit
+// fails to write the manifest releases the compaction commit lock, so the
+// next commit and Close return instead of blocking on it.
+func TestDB_TransactionManifestWriteError(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	// Leave the memdb empty so opening a transaction does not commit to
+	// the manifest itself.
+	h.put("foo", "bar")
+	h.compactMem()
+
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, errors.New("manifest write error"))
+	for i := 0; i < 2; i++ {
+		tr, err := h.db.OpenTransaction()
+		if err != nil {
+			t.Fatal("OpenTransaction: got error: ", err)
+		}
+		if err := tr.Put([]byte("foo"), []byte("baz"), nil); err != nil {
+			t.Fatal("Transaction.Put: got error: ", err)
+		}
+
+		// The manifest writer keeps its error, so both commits fail.
+		if err := tr.Commit(); err == nil {
+			t.Fatal("Transaction.Commit: expected error")
+		}
+		tr.Discard()
+	}
+
+	h.db.Close()
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, nil)
+
+	// Should not lose data
+	h.openDB()
+	h.getVal("foo", "bar")
 }
 
 func assertErr(t *testing.T, err error, wanterr bool) {
