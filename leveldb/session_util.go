@@ -436,7 +436,7 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 			s.manifest = jw
 		} else {
 			writer.Close()
-			if rerr := s.stor.Remove(fd); err != nil {
+			if rerr := s.stor.Remove(fd); rerr != nil {
 				err = fmt.Errorf("newManifest error: %v, cleanup error (%v)", err, rerr)
 			}
 			s.reuseFileNum(fd.Num)
