@@ -14,6 +14,7 @@ import (
 
 	"github.com/gcash/goleveldb/leveldb/storage"
 	"github.com/gcash/goleveldb/leveldb/testutil"
+	"github.com/gcash/goleveldb/leveldb/util"
 	"github.com/onsi/gomega"
 )
 
@@ -101,6 +102,31 @@ func TestGetOverlaps(t *testing.T) {
 		if !reflect.DeepEqual(x.expected, fnums) {
 			t.Errorf("case %d failed, expected %v, got %v", i, x.expected, fnums)
 		}
+	}
+}
+
+// TestNewIndexIteratorInvertedRange ensures an iterator over sorted tables
+// whose range starts after it ends is empty, rather than panicking when a
+// whole table lies between the limit and the start.
+func TestNewIndexIteratorInvertedRange(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	s, err := newSession(stor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ik := func(ukey string) internalKey {
+		return makeInternalKey(nil, []byte(ukey), keyMaxSeq, keyTypeSeek)
+	}
+	tf := tFiles{
+		newTableFile(storage.FileDesc{Type: storage.TypeTable, Num: 1}, 1, ik("a"), ik("b")),
+		newTableFile(storage.FileDesc{Type: storage.TypeTable, Num: 2}, 1, ik("c"), ik("d")),
+		newTableFile(storage.FileDesc{Type: storage.TypeTable, Num: 3}, 1, ik("e"), ik("f")),
+	}
+	iter := tf.newIndexIterator(nil, s.icmp, &util.Range{Start: ik("e"), Limit: ik("b5")}, nil)
+	if iter.First() {
+		t.Error("iterator over an inverted range is not empty")
 	}
 }
 
