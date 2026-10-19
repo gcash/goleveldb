@@ -263,7 +263,7 @@ func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done,
 type mHead struct {
 	buckets          []mBucket
 	mask             uint32
-	predecessor      unsafe.Pointer // *mNode
+	predecessor      unsafe.Pointer // *mHead
 	resizeInProgress int32
 
 	overflow        int32
