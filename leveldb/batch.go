@@ -344,22 +344,29 @@ func decodeBatchToMem(data []byte, mdb *memdb.DB) (seq uint64, batchLen int, err
 		return 0, 0, newErrBatchCorrupted("invalid sequence number")
 	}
 	data = data[batchHeaderLen:]
-	var ik []byte
+
+	// Check every record before inserting any, so that a malformed batch is
+	// skipped whole rather than half applied: recovery does not move the
+	// sequence past a batch it skips.
 	var decodedLen int
-	err = decodeBatch(data, func(i int, index batchIndex) error {
+	if err := decodeBatch(data, func(i int, index batchIndex) error {
 		if i >= batchLen {
 			return newErrBatchCorrupted("invalid records length")
 		}
-		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.keyType)
-		if err := mdb.Put(ik, index.v(data)); err != nil {
-			return err
-		}
 		decodedLen++
 		return nil
-	})
-	if err == nil && decodedLen != batchLen {
-		err = newErrBatchCorrupted(fmt.Sprintf("invalid records length: %d vs %d", batchLen, decodedLen))
+	}); err != nil {
+		return 0, 0, err
 	}
+	if decodedLen != batchLen {
+		return 0, 0, newErrBatchCorrupted(fmt.Sprintf("invalid records length: %d vs %d", batchLen, decodedLen))
+	}
+
+	var ik []byte
+	err = decodeBatch(data, func(i int, index batchIndex) error {
+		ik = makeInternalKey(ik, index.k(data), seq+uint64(i), index.keyType)
+		return mdb.Put(ik, index.v(data))
+	})
 	return
 }
 

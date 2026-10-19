@@ -450,6 +450,51 @@ func TestJournalRecoveryAlwaysVerifiesChecksums(t *testing.T) {
 	}
 }
 
+// TestJournalRecoveryMalformedBatchNotHalfApplied ensures a batch whose header
+// is sound but one of whose records is not is skipped whole. Recovery used to
+// insert its records up to the bad one before rejecting it, without moving
+// the sequence past them, so later writes reused their sequence numbers.
+func TestJournalRecoveryMalformedBatchNotHalfApplied(t *testing.T) {
+	fixture := newRecoveryFixture(frozenSeqFixture)
+	fixture.batches = fixtureSeqBatches(firstJournalSeq, 15)
+	dir := writeRecoveryFixture(t, fixture)
+
+	// Rewrite the journal with a last batch at 16 that claims two records but
+	// holds one good one and a record of an unknown type. Its checksum is
+	// valid, so only decoding finds the fault.
+	var records [][]byte
+	for _, b := range fixture.batches {
+		rec, err := fixtureEncodeBatch(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, rec)
+	}
+	half, err := fixtureEncodeBatch(fixtureBatch{seq: 16, entries: []fixtureEntry{{key: "half", value: "v"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary.LittleEndian.PutUint32(half[8:], 2)
+	records = append(records, append(half, 0x7f))
+	if err := fixtureWriteJournalFile(filepath.Join(dir, fixture.journalName()), records); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := OpenFile(dir, nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	if _, err := db.Get([]byte("half"), nil); err != errors.ErrNotFound {
+		t.Errorf("get half = %v, want not found: its batch is malformed", err)
+	}
+	for seq := uint64(firstJournalSeq); seq <= 15; seq++ {
+		if _, err := db.Get([]byte(fixtureSeqKey(seq)), nil); err != nil {
+			t.Errorf("get %s: %v", fixtureSeqKey(seq), err)
+		}
+	}
+}
+
 // TestJournalRecoveryReadWriteOpenPreservesRecords covers what made the bug
 // destructive rather than merely wrong: the skipped records were not just
 // invisible, they were destroyed. recoverJournal ends by committing a manifest
