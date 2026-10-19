@@ -199,7 +199,7 @@ func TestDecodeBatchToMemRejectsSequencePastInternalKey(t *testing.T) {
 		{"sequence after recovery", keyMaxSeq, []string{"k"}},
 	} {
 		mdb := memdb.New(defaultIComparer, 1<<20)
-		if _, _, err := decodeBatchToMem(put(test.seq, test.keys...), 0, mdb); !errors.IsCorrupted(err) {
+		if _, _, err := decodeBatchToMem(put(test.seq, test.keys...), mdb); !errors.IsCorrupted(err) {
 			t.Errorf("%s: err = %v", test.name, err)
 		}
 		// The whole batch is rejected, not only the records past the end.
@@ -210,7 +210,7 @@ func TestDecodeBatchToMemRejectsSequencePastInternalKey(t *testing.T) {
 
 	for _, wantSeq := range []uint64{7, keyMaxSeq - 1} {
 		mdb := memdb.New(defaultIComparer, 1<<20)
-		seq, n, err := decodeBatchToMem(put(wantSeq, "k"), 0, mdb)
+		seq, n, err := decodeBatchToMem(put(wantSeq, "k"), mdb)
 		if err != nil || seq != wantSeq || n != 1 || mdb.Len() != 1 {
 			t.Errorf("seq %d: seq=%d n=%d len=%d err=%v", wantSeq, seq, n,
 				mdb.Len(), err)

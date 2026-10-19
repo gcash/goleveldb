@@ -106,12 +106,13 @@ func (db *DB) mpoolDrain() {
 			}
 		case <-db.closeC:
 			ticker.Stop()
-			// Make sure the pool is drained.
+			// Drop what is pooled, but leave the pool open: a memdb
+			// compaction still finishing can put a memdb back after Close
+			// has begun, and a send on a closed channel panics.
 			select {
 			case <-db.memPool:
-			case <-time.After(time.Second):
+			default:
 			}
-			close(db.memPool)
 			return
 		}
 	}
