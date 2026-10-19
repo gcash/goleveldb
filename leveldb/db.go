@@ -72,7 +72,8 @@ type DB struct {
 	writeErr     error // stops every later write and compaction; under writeErrMu
 	writeDelay   time.Duration
 	writeDelayN  int
-	tr           *Transaction
+	trMu         sync.Mutex
+	tr           *Transaction // set and cleared under the write lock and trMu
 
 	// Compaction.
 	compCommitLk     sync.Mutex
@@ -1276,9 +1277,14 @@ func (db *DB) Close() error {
 	// Signal all goroutines.
 	close(db.closeC)
 
-	// Discard open transaction.
-	if db.tr != nil {
-		db.tr.Discard()
+	// Discard open transaction. OpenTransaction sets db.tr only while the DB
+	// is open, under trMu, so a transaction opened since Close began is
+	// either read here or backs out.
+	db.trMu.Lock()
+	tr := db.tr
+	db.trMu.Unlock()
+	if tr != nil {
+		tr.Discard()
 	}
 
 	// Acquire writer lock.

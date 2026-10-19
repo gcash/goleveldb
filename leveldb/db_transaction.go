@@ -203,7 +203,9 @@ func (tr *Transaction) Write(b *Batch, wo *opt.WriteOptions) error {
 
 func (tr *Transaction) setDone() {
 	tr.closed = true
+	tr.db.trMu.Lock()
 	tr.db.tr = nil
+	tr.db.trMu.Unlock()
 	tr.mem.decref()
 	<-tr.db.writeLockC
 }
@@ -390,6 +392,16 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 		return nil, err
 	}
 
+	// Close may have begun since the check above. It marks the DB closed,
+	// then reads db.tr once under trMu, so check under trMu too: either Close
+	// sees this transaction and discards it, or this backs out. Close would
+	// otherwise wait forever for the write lock a transaction it missed holds.
+	db.trMu.Lock()
+	defer db.trMu.Unlock()
+	if db.isClosed() {
+		<-db.writeLockC
+		return nil, ErrClosed
+	}
 	tr := &Transaction{
 		db:  db,
 		seq: db.seq,
