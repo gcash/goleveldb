@@ -330,10 +330,18 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 		panic("leveldb: has open transaction")
 	}
 
-	// Flush current memdb. On an error, release the write lock, or every
-	// later write and Close block on it.
+	// Flush current memdb, or wait for a flush already under way: the flush
+	// records the sequence at its rotation, so committing after the
+	// transaction would move the MANIFEST's sequence back below the
+	// transaction's. On an error, release the write lock, or every later
+	// write and Close block on it.
 	if db.mem != nil && db.mem.Len() != 0 {
 		if _, err := db.rotateMem(0, true); err != nil {
+			<-db.writeLockC
+			return nil, err
+		}
+	} else if db.hasFrozenMem() {
+		if err := db.compTriggerWait(db.mcompCmdC); err != nil {
 			<-db.writeLockC
 			return nil, err
 		}

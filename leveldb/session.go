@@ -161,6 +161,10 @@ func (s *session) recover() (err error) {
 		jr      = journal.NewReader(reader, dropper{s, fd}, strict, true)
 		rec     = &sessionRecord{}
 		staging = s.stVersion.newStaging()
+
+		// The highest sequence recorded. A MANIFEST written before commits
+		// stopped lowering it can end below a sequence already in use.
+		maxSeq uint64
 	)
 	for {
 		var r io.Reader
@@ -181,6 +185,9 @@ func (s *session) recover() (err error) {
 			}
 			// commit record to version staging
 			staging.commit(rec)
+			if rec.has(recSeqNum) && rec.seqNum > maxSeq {
+				maxSeq = rec.seqNum
+			}
 		} else {
 			err = errors.SetFd(err, fd)
 			if strict || !errors.IsCorrupted(err) {
@@ -209,6 +216,7 @@ func (s *session) recover() (err error) {
 	s.manifestFd = fd
 	s.setVersion(rec, staging.finish(false))
 	s.setNextFileNum(rec.nextFileNum)
+	rec.setSeqNum(maxSeq)
 	s.recordCommited(rec)
 	return nil
 }
@@ -232,6 +240,12 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 	// fails, nothing more is appended until the DB is reopened.
 	if s.manifestErr != nil {
 		return s.manifestErr
+	}
+
+	// Never record a lower sequence than the MANIFEST already holds, or
+	// writes after a reopen would reuse sequence numbers in use.
+	if r.has(recSeqNum) && r.seqNum < s.stSeqNum {
+		r.setSeqNum(s.stSeqNum)
 	}
 
 	v := s.version()

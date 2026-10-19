@@ -59,9 +59,12 @@ import (
 // and recoverJournal skips corrupt batches without failing the open, because
 // opt.StrictJournal is set neither by DefaultStrict nor by NoStrict. So the
 // records went with no error and no trace an application could observe.
-// goleveldb's own writers don't produce this shape in normal operation,
-// because a goleveldb memtable flush records frozenSeq, the sequence at
-// rotation, rather than the live counter.
+// A goleveldb memtable flush records frozenSeq, the sequence at rotation,
+// rather than the live counter, but goleveldb's own writers produced this
+// shape too: a transaction opened while a flush was pending recorded its own,
+// higher sequence, and if the DB closed or crashed before the flush
+// committed, the frozen journal's batches were below it. OpenTransaction now
+// waits for the flush.
 
 const (
 	// The journal holds one batch per sequence in [firstJournalSeq,

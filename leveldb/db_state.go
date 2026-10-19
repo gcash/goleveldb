@@ -217,6 +217,13 @@ func (db *DB) getFrozenMem() *memDB {
 	return db.frozenMem
 }
 
+// hasFrozenMem returns whether a frozen memdb is waiting to be flushed.
+func (db *DB) hasFrozenMem() bool {
+	db.memMu.RLock()
+	defer db.memMu.RUnlock()
+	return db.frozenMem != nil
+}
+
 // Drop frozen memdb; assume that frozen memdb isn't nil.
 func (db *DB) dropFrozenMem() {
 	db.memMu.Lock()

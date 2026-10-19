@@ -1640,6 +1640,36 @@ func TestDB_OpenTransactionErrorReleasesWriteLock(t *testing.T) {
 	h.getVal("b", "2")
 }
 
+// TestDB_OpenTransactionWaitsForFlush ensures a transaction opened while a
+// memdb flush is still under way waits for the flush, even though the current
+// memdb is empty. A transaction that committed first left the flush, which
+// records the older sequence at its rotation, to move the MANIFEST's sequence
+// back below the transaction's, so writes after a reopen reused its numbers.
+func TestDB_OpenTransactionWaitsForFlush(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB})
+	defer h.close()
+
+	// A Put larger than the write buffer rotates the memdb right after it,
+	// leaving the current memdb empty while the frozen one is flushed. The
+	// flush fails, so it is still under way when the transaction opens, and
+	// waiting for it returns its error.
+	big := bytes.Repeat([]byte{'x'}, 128*opt.KiB)
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, errors.New("table write error"))
+	if err := h.db.Put([]byte("big"), big, nil); err != nil {
+		t.Fatal("Put: got error: ", err)
+	}
+	if tr, err := h.db.OpenTransaction(); err == nil {
+		tr.Discard()
+		t.Fatal("transaction while the memdb flush fails: expected the flush's error")
+	}
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, nil)
+
+	// The frozen memdb survives in its journal.
+	h.db.Close()
+	h.openDB()
+	h.getVal("big", string(big))
+}
+
 // TestDB_LargeWriteCommitErrorReleasesWriteLock ensures a Write large enough
 // to run as a transaction discards it when the commit fails, so the write
 // lock is released and later writes and Close do not block on it.
@@ -1996,6 +2026,56 @@ func TestSessionManifestSyncErrorStopsCommits(t *testing.T) {
 	}
 	if got := s.manifest.Size(); got != size {
 		t.Errorf("MANIFEST grew from %d to %d bytes after the failed sync", size, got)
+	}
+}
+
+// TestSessionCommitKeepsHighestSequence ensures a commit never lowers the
+// sequence the MANIFEST records, as a memdb flush that records the sequence
+// at its rotation could after a transaction, and that recovery takes the
+// highest sequence in the MANIFEST rather than the last, which a MANIFEST an
+// older version wrote can hold lower.
+func TestSessionCommitKeepsHighestSequence(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	o := &opt.Options{}
+	s, err := newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	for _, seq := range []uint64{10, 5} {
+		rec := &sessionRecord{}
+		rec.setSeqNum(seq)
+		if err := s.commit(rec, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if s.stSeqNum != 10 {
+		t.Errorf("sequence %d after committing 10 then 5, want 10", s.stSeqNum)
+	}
+
+	// Append a lower sequence directly, as an older version could have.
+	rec := &sessionRecord{}
+	rec.setSeqNum(3)
+	if err := s.flushManifest(rec); err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	s.release()
+
+	s, err = newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.recover(); err != nil {
+		t.Fatal(err)
+	}
+	if s.stSeqNum != 10 {
+		t.Errorf("recovered sequence %d, want 10", s.stSeqNum)
 	}
 }
 
