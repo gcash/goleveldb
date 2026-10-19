@@ -576,7 +576,8 @@ func (r *Reader) readRawBlock(bh blockHandle, verifyChecksum bool) ([]byte, erro
 		}
 	}
 
-	switch data[bh.length] {
+	// Read the type before data can go back to the pool.
+	switch blockType := data[bh.length]; blockType {
 	case blockTypeNoCompression:
 		data = data[:bh.length]
 	case blockTypeSnappyCompression:
@@ -595,7 +596,7 @@ func (r *Reader) readRawBlock(bh blockHandle, verifyChecksum bool) ([]byte, erro
 		data = decData
 	default:
 		r.bpool.Put(data)
-		return nil, r.newErrCorruptedBH(bh, fmt.Sprintf("unknown compression type %#x", data[bh.length]))
+		return nil, r.newErrCorruptedBH(bh, fmt.Sprintf("unknown compression type %#x", blockType))
 	}
 	return data, nil
 }

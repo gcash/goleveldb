@@ -8,12 +8,14 @@ package table
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
+	"github.com/gcash/goleveldb/leveldb/errors"
 	"github.com/gcash/goleveldb/leveldb/iterator"
 	"github.com/gcash/goleveldb/leveldb/opt"
 	"github.com/gcash/goleveldb/leveldb/storage"
@@ -149,5 +151,56 @@ func TestWriterCloseTwice(t *testing.T) {
 	}
 	if s := pool.String(); !strings.Contains(s, " P·1 ") {
 		t.Errorf("buffer returned to the pool more than once: %s", s)
+	}
+}
+
+// TestReaderUnknownCompressionType ensures a block with an unknown compression
+// type reads as corrupted, naming the type, when its buffer comes from a pool.
+func TestReaderUnknownCompressionType(t *testing.T) {
+	var buf bytes.Buffer
+	o := &opt.Options{Compression: opt.NoCompression}
+	w := NewWriter(&buf, o, nil, 0)
+	if err := w.Append([]byte("k"), []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data := buf.Bytes()
+
+	// Find the data block through the index block.
+	r, err := NewReader(bytes.NewReader(data), int64(len(data)), storage.FileDesc{}, nil, nil, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := r.readBlock(r.indexBH, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	iter := r.newBlockIter(index, nil, nil, true)
+	if !iter.First() {
+		t.Fatal("empty index block")
+	}
+	bh, n := decodeBlockHandle(iter.Value())
+	iter.Release()
+	if n == 0 {
+		t.Fatal("bad data block handle")
+	}
+
+	// Give the data block an unknown compression type and a matching
+	// checksum, so the type is what gets checked.
+	end := bh.offset + bh.length
+	data[end] = 0x7f
+	binary.LittleEndian.PutUint32(data[end+1:], util.NewCRC(data[bh.offset:end+1]).Value())
+
+	pool := util.NewBufferPool(opt.DefaultBlockSize + 5)
+	r, err = NewReader(bytes.NewReader(data), int64(len(data)), storage.FileDesc{}, nil, pool, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Get([]byte("k"), nil); !errors.IsCorrupted(err) ||
+		!strings.Contains(err.Error(), "unknown compression type 0x7f") {
+
+		t.Fatalf("get = %v, want a corruption error for compression type 0x7f", err)
 	}
 }
