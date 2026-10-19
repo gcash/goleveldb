@@ -588,3 +588,39 @@ func TestCacheEnumerateNodesOnce(t *testing.T) {
 		t.Errorf("%d values released by Close, want %d", got, n)
 	}
 }
+
+// TestCacheCloseDuringGetThatEvicts ensures Close returns while a Get is under
+// way whose Promote evicts a node and releases its last reference. That
+// release took the read lock again while Close waited for the write lock, so
+// neither returned (syndtr/goleveldb#340).
+func TestCacheCloseDuringGetThatEvicts(t *testing.T) {
+	c := NewCache(NewLRU(1))
+	set(c, 0, 1, 1, 1, nil).Release() // the LRU holds the last reference
+
+	inside := make(chan struct{})
+	proceed := make(chan struct{})
+	got := make(chan *Handle)
+	go func() {
+		got <- c.Get(0, 2, func() (int, Value) {
+			close(inside)
+			<-proceed
+			return 1, 2
+		})
+	}()
+	<-inside
+
+	closed := make(chan struct{})
+	go func() {
+		c.Close(false)
+		close(closed)
+	}()
+	// Let the Get evict node 1 only once Close is waiting for it.
+	for atomic.LoadInt32(&c.closing) == 0 {
+		runtime.Gosched()
+	}
+	close(proceed)
+	if h := <-got; h != nil {
+		h.Release()
+	}
+	<-closed
+}

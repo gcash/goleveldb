@@ -366,19 +366,28 @@ type Stats struct {
 
 // Cache is a 'cache map'.
 type Cache struct {
-	mu     sync.RWMutex
-	mHead  unsafe.Pointer // *mNode
-	cacher Cacher
-	closed bool
-
+	// Need 64-bit alignment.
+	inflight   int64 // calls in progress
 	statNodes  int64
 	statSize   int64
-	statGrow   int32
-	statShrink int32
 	statHit    int64
 	statMiss   int64
 	statSet    int64
 	statDel    int64
+	statGrow   int32
+	statShrink int32
+
+	mHead  unsafe.Pointer // *mNode
+	cacher Cacher
+
+	// Close stops new calls and waits for those in progress. Entering a call
+	// never waits for Close, unlike taking a read lock while Close waits for
+	// the write lock, so a call can enter again from inside another, as the
+	// release of a handle the cacher evicts does (syndtr/goleveldb#340).
+	closing int32 // Close has started: calls other than releases return
+	closed  int32 // the calls have drained: a release finalizes its node
+	drainMu sync.Mutex
+	drained sync.Cond
 }
 
 // NewCache creates a new 'cache map'. The cacher is optional and
@@ -397,7 +406,47 @@ func NewCache(cacher Cacher) *Cache {
 		mHead:  unsafe.Pointer(h),
 		cacher: cacher,
 	}
+	r.drained.L = &r.drainMu
 	return r
+}
+
+// enter starts a call, unless Close has started; leave ends it.
+func (r *Cache) enter() bool {
+	atomic.AddInt64(&r.inflight, 1)
+	if atomic.LoadInt32(&r.closing) != 0 {
+		r.leave()
+		return false
+	}
+	return true
+}
+
+// enterRelease starts the release of a node, unless the cache has closed.
+// Unlike enter, it succeeds while Close waits for the calls in progress,
+// since a release can come from inside one of them.
+func (r *Cache) enterRelease() bool {
+	atomic.AddInt64(&r.inflight, 1)
+	if atomic.LoadInt32(&r.closed) != 0 {
+		r.leave()
+		return false
+	}
+	return true
+}
+
+func (r *Cache) leave() {
+	if atomic.AddInt64(&r.inflight, -1) == 0 && atomic.LoadInt32(&r.closing) != 0 {
+		r.drainMu.Lock()
+		r.drained.Broadcast()
+		r.drainMu.Unlock()
+	}
+}
+
+// drain waits until no call is in progress.
+func (r *Cache) drain() {
+	r.drainMu.Lock()
+	for atomic.LoadInt64(&r.inflight) != 0 {
+		r.drained.Wait()
+	}
+	r.drainMu.Unlock()
 }
 
 func (r *Cache) getBucket(hash uint32) (*mHead, *mBucket) {
@@ -429,14 +478,12 @@ func (r *Cache) delete(n *Node) bool {
 // GetStats returns cache statistics. It is safe to call on a closed cache,
 // which reports no buckets.
 func (r *Cache) GetStats() Stats {
-	// Hold the lock like every other exported method, so a concurrent Close
-	// cannot clear mHead between the nil check and the read.
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	// Enter like every other exported method, so a concurrent Close cannot
+	// clear mHead while it is read.
 	var buckets int
-	if h := (*mHead)(atomic.LoadPointer(&r.mHead)); h != nil {
-		buckets = len(h.buckets)
+	if r.enter() {
+		buckets = len((*mHead)(atomic.LoadPointer(&r.mHead)).buckets)
+		r.leave()
 	}
 	return Stats{
 		Buckets:     buckets,
@@ -483,11 +530,10 @@ func (r *Cache) SetCapacity(capacity int) {
 // The returned 'cache handle' should be released after use by calling Release
 // method.
 func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Handle {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	if !r.enter() {
 		return nil
 	}
+	defer r.leave()
 
 	hash := murmur32(ns, key, 0xf00)
 	for {
@@ -542,11 +588,10 @@ func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Han
 //
 // Delete return true is such 'cache node' exist.
 func (r *Cache) Delete(ns, key uint64, delFunc func()) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	if !r.enter() {
 		return false
 	}
+	defer r.leave()
 
 	hash := murmur32(ns, key, 0xf00)
 	for {
@@ -582,11 +627,10 @@ func (r *Cache) Delete(ns, key uint64, delFunc func()) bool {
 //
 // Evict return true is such 'cache node' exist.
 func (r *Cache) Evict(ns, key uint64) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	if !r.enter() {
 		return false
 	}
+	defer r.leave()
 
 	hash := murmur32(ns, key, 0xf00)
 	for {
@@ -611,11 +655,10 @@ func (r *Cache) Evict(ns, key uint64) bool {
 // EvictNS evicts 'cache node' with the given namespace. This will
 // simply call Cacher.Evict on all nodes with the given namespace.
 func (r *Cache) EvictNS(ns uint64) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	if !r.enter() {
 		return
 	}
+	defer r.leave()
 
 	if r.cacher != nil {
 		nodes := r.enumerateNodesByNS(ns)
@@ -635,11 +678,10 @@ func (r *Cache) evictAll() {
 
 // EvictAll evicts all 'cache node'. This will simply call Cacher.EvictAll.
 func (r *Cache) EvictAll() {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.closed {
+	if !r.enter() {
 		return
 	}
+	defer r.leave()
 
 	if r.cacher != nil {
 		r.evictAll()
@@ -653,35 +695,34 @@ func (r *Cache) EvictAll() {
 // If 'force' is true then all 'cache node' will be forcefully released
 // even if the 'node ref' is not zero.
 func (r *Cache) Close(force bool) {
-	var head *mHead
-	// Hold RW-lock to make sure no more in-flight operations.
-	r.mu.Lock()
-	if !r.closed {
-		r.closed = true
-		head = (*mHead)(atomic.LoadPointer(&r.mHead))
-		atomic.StorePointer(&r.mHead, nil)
+	if !atomic.CompareAndSwapInt32(&r.closing, 0, 1) {
+		return
 	}
-	r.mu.Unlock()
+	// Wait for the calls in progress. Releases keep entering until the cache
+	// is marked closed, so wait once more for those that entered before.
+	r.drain()
+	atomic.StoreInt32(&r.closed, 1)
+	r.drain()
+	head := (*mHead)(atomic.LoadPointer(&r.mHead))
+	atomic.StorePointer(&r.mHead, nil)
 
-	if head != nil {
-		head.enumerateNodesWithCB(func(nodes []*Node) {
-			for _, n := range nodes {
-				// Zeroing ref. Prevent unRefExternal to call finalizer.
-				if force {
-					atomic.StoreInt32(&n.ref, 0)
-				}
-
-				// Evict from cacher.
-				if r.cacher != nil {
-					r.cacher.Evict(n)
-				}
-
-				if force {
-					n.callFinalizer()
-				}
+	head.enumerateNodesWithCB(func(nodes []*Node) {
+		for _, n := range nodes {
+			// Zeroing ref. Prevent unRefExternal to call finalizer.
+			if force {
+				atomic.StoreInt32(&n.ref, 0)
 			}
-		})
-	}
+
+			// Evict from cacher.
+			if r.cacher != nil {
+				r.cacher.Evict(n)
+			}
+
+			if force {
+				n.callFinalizer()
+			}
+		}
+	})
 }
 
 // Node is a 'cache node'.
@@ -761,14 +802,13 @@ func (n *Node) unRefInternal(updateStat bool) {
 
 func (n *Node) unRefExternal() {
 	if atomic.AddInt32(&n.ref, -1) == 0 {
-		n.r.mu.RLock()
-		if n.r.closed {
-			n.callFinalizer()
-		} else {
+		if n.r.enterRelease() {
 			n.r.delete(n)
 			atomic.AddInt64(&n.r.statDel, 1)
+			n.r.leave()
+		} else {
+			n.callFinalizer()
 		}
-		n.r.mu.RUnlock()
 	}
 }
 
