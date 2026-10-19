@@ -1640,6 +1640,17 @@ func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	if err := h.db.Put([]byte("c"), []byte("3"), nil); !stderrors.Is(err, ErrWritesStopped) {
 		t.Errorf("put after a failed journal write = %v, want an ErrWritesStopped match", err)
 	}
+	// The journal writer keeps its own error, which alone fails the put, so
+	// check what does not touch the journal too.
+	if tr, err := h.db.OpenTransaction(); !stderrors.Is(err, ErrWritesStopped) {
+		if err == nil {
+			tr.Discard()
+		}
+		t.Errorf("transaction after a failed journal write = %v, want an ErrWritesStopped match", err)
+	}
+	if err := h.db.CompactRange(util.Range{}); !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("CompactRange after a failed journal write = %v, want an ErrWritesStopped match", err)
+	}
 
 	h.reopenDB()
 	h.getVal("a", "1")
@@ -1744,9 +1755,14 @@ func TestDB_ConcurrentSyncErrorStopsEveryWriter(t *testing.T) {
 	defer h.close()
 
 	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, errors.New("journal sync error"))
+	h.stor.ResetCounter(testutil.ModeWrite, storage.TypeJournal)
+	h.stor.ResetCounter(testutil.ModeSync, storage.TypeJournal)
 	const n = 16
 	errs := make(chan error, n)
 	var wg sync.WaitGroup
+	// Hold the write lock while the writers start, so that those already
+	// waiting when it is released merge into the first one's batch.
+	h.db.writeLockC <- struct{}{}
 	for i := 0; i < n; i++ {
 		wg.Add(1)
 		go func(i int) {
@@ -1754,12 +1770,21 @@ func TestDB_ConcurrentSyncErrorStopsEveryWriter(t *testing.T) {
 			errs <- h.db.Put([]byte(fmt.Sprintf("k%d", i)), []byte("v"), &opt.WriteOptions{Sync: true})
 		}(i)
 	}
+	<-h.db.writeLockC
 	wg.Wait()
 	close(errs)
 	for err := range errs {
 		if !stderrors.Is(err, ErrWritesStopped) {
 			t.Errorf("concurrent put with failing journal syncs = %v, want an ErrWritesStopped match", err)
 		}
+	}
+	// Only the first batch, with what merged into it, reached the journal:
+	// one write and its failed sync.
+	if writes, _ := h.stor.Counter(testutil.ModeWrite, storage.TypeJournal); writes != 1 {
+		t.Errorf("journal writes: %d, want 1", writes)
+	}
+	if syncs, _ := h.stor.Counter(testutil.ModeSync, storage.TypeJournal); syncs != 1 {
+		t.Errorf("journal syncs: %d, want 1", syncs)
 	}
 	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, nil)
 	if err := h.db.Put([]byte("after"), []byte("v"), nil); !stderrors.Is(err, ErrWritesStopped) {
@@ -2777,8 +2802,10 @@ func TestDB_JanitorRemovesTempFiles(t *testing.T) {
 
 // TestDB_CloseRemovesObsoleteTables ensures Close removes the tables that
 // compactions replaced, which the session may not have got to yet, as the
-// next open would. Recover reads every table present, so a replaced table left
-// behind brought back what the compaction had dropped, deleted keys included.
+// next open would: Recover reads every table present, and would bring back
+// what they held. A version held across the compaction and Close keeps the
+// session from removing them first, which it usually managed to, so that only
+// Close's removal can pass the test.
 func TestDB_CloseRemovesObsoleteTables(t *testing.T) {
 	h := newDbHarness(t)
 	defer h.close()
@@ -2787,9 +2814,11 @@ func TestDB_CloseRemovesObsoleteTables(t *testing.T) {
 	h.compactMem()
 	h.delete("k")
 	h.compactMem()
+	v := h.db.s.version()
 	h.compactRange("", "") // drops both the put and the delete
-
 	h.closeDB()
+	v.release()
+
 	tables, err := h.stor.List(storage.TypeTable)
 	if err != nil {
 		t.Fatal(err)
@@ -2880,10 +2909,26 @@ func TestDB_WriteLandsWhenRotationAfterItFails(t *testing.T) {
 	h.getVal("big", big)
 	h.stor.EmulateError(testutil.ModeCreate, storage.TypeJournal, nil)
 
-	h.put("a", "1")
+	// The memdb grew past the write buffer and has room left, so the later
+	// write is bigger than that. Its rotation must come first, leaving the
+	// write alone in the new memdb; one after it would leave that empty.
+	a := strings.Repeat("y", 16*opt.KiB)
+	m := h.db.getEffectiveMem()
+	free := m.Free()
+	m.decref()
+	if free >= len(a) {
+		t.Fatalf("setup: the memdb has %d bytes free, which the later write would fit in", free)
+	}
+	h.put("a", a)
+	m = h.db.getEffectiveMem()
+	entries := m.Len()
+	m.decref()
+	if entries != 1 {
+		t.Errorf("entries in the memdb after a write that needs room: %d, want 1, the write", entries)
+	}
 	h.reopenDB()
 	h.getVal("big", big)
-	h.getVal("a", "1")
+	h.getVal("a", a)
 }
 
 // TestDB_RotationsLeaveNoExtraMemdbRef ensures each memdb rotation leaves the

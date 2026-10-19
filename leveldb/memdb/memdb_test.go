@@ -227,8 +227,43 @@ func TestFindGE(t *testing.T) {
 		t.Fatalf("%d entries after deleting the tall nodes, want %d", p.Len(), want)
 	}
 
-	// Deleting relinks nodes on every level, which Len does not see. findGE
-	// must still agree with a walk of the links, for every key.
+	// Deleting relinks nodes on every level, which Len does not see. Level 0
+	// must hold exactly the keys left, every higher level only keys of level
+	// 0, in order, and findGE must still agree with a walk of the links.
+	deleted := make(map[string]bool, len(tall))
+	for _, key := range tall {
+		deleted[string(key)] = true
+	}
+	var left [][]byte
+	for _, key := range keys {
+		if !deleted[string(key)] {
+			left = append(left, key)
+		}
+	}
+	var walked [][]byte
+	for node := p.nodeData[nNext]; node != 0; node = p.nodeData[node+nNext] {
+		walked = append(walked, keyOf(node))
+	}
+	if len(walked) != len(left) {
+		t.Fatalf("%d keys on level 0 after the deletes, want %d", len(walked), len(left))
+	}
+	for i := range left {
+		if !bytes.Equal(walked[i], left[i]) {
+			t.Fatalf("key %d on level 0 after the deletes = %q, want %q", i, walked[i], left[i])
+		}
+	}
+	for h := 1; h < p.maxHeight; h++ {
+		i := 0
+		for node := p.nodeData[nNext+h]; node != 0; node = p.nodeData[node+nNext+h] {
+			for i < len(walked) && !bytes.Equal(walked[i], keyOf(node)) {
+				i++
+			}
+			if i == len(walked) {
+				t.Fatalf("key %q on level %d after the deletes is not on level 0 in order", keyOf(node), h)
+			}
+			i++
+		}
+	}
 	check(nil)
 	for _, key := range keys {
 		check(key)

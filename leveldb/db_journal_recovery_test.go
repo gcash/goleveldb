@@ -436,17 +436,20 @@ func TestJournalRecoveryAlwaysVerifiesChecksums(t *testing.T) {
 		return dir
 	}
 
-	for _, strict := range []opt.Strict{opt.NoStrict, opt.StrictManifest} {
-		got := recoveredFixtureKeys(t, corrupted(t), &opt.Options{Strict: strict})
-		assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq)[:lastJournalSeq-firstJournalSeq])
-	}
+	// Read-only opens recover through their own loop, which verifies them too.
+	for _, readOnly := range []bool{false, true} {
+		for _, strict := range []opt.Strict{opt.NoStrict, opt.StrictManifest} {
+			got := recoveredFixtureKeys(t, corrupted(t), &opt.Options{Strict: strict, ReadOnly: readOnly})
+			assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq)[:lastJournalSeq-firstJournalSeq])
+		}
 
-	db, err := OpenFile(corrupted(t), &opt.Options{Strict: opt.StrictJournal})
-	if err == nil {
-		db.Close()
-		t.Error("open with a corrupted journal under StrictJournal: expected error")
-	} else if !errors.IsCorrupted(err) {
-		t.Errorf("open with a corrupted journal under StrictJournal = %v, want a corruption error", err)
+		db, err := OpenFile(corrupted(t), &opt.Options{Strict: opt.StrictJournal, ReadOnly: readOnly})
+		if err == nil {
+			db.Close()
+			t.Errorf("open (read-only %v) with a corrupted journal under StrictJournal: expected error", readOnly)
+		} else if !errors.IsCorrupted(err) {
+			t.Errorf("open (read-only %v) with a corrupted journal under StrictJournal = %v, want a corruption error", readOnly, err)
+		}
 	}
 }
 
