@@ -28,7 +28,7 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 	}
 	if sync {
 		if err := db.journalWriter.Sync(); err != nil {
-			return &journalSyncError{err}
+			return &writesStoppedError{"journal sync", err}
 		}
 	}
 	return nil
@@ -242,7 +242,7 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 		db.addSeq(uint64(batchesLen(batches)))
 		// After a failed sync the journal's state is unknown, so stop all
 		// writes until the DB is reopened, as LevelDB does.
-		if _, ok := err.(*journalSyncError); ok {
+		if _, ok := err.(*writesStoppedError); ok {
 			db.writeErr = err
 			db.logf("journal@write %v", err)
 		}

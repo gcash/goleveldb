@@ -1519,8 +1519,8 @@ func TestDB_ManifestWriteError(t *testing.T) {
 }
 
 // TestDB_TransactionManifestWriteError ensures a transaction whose commit
-// fails to write the manifest releases the compaction commit lock, so the
-// next commit and Close return instead of blocking on it.
+// fails to write the manifest releases the compaction commit lock, so a later
+// compaction and Close return instead of blocking on it.
 func TestDB_TransactionManifestWriteError(t *testing.T) {
 	h := newDbHarness(t)
 	defer h.close()
@@ -1531,20 +1531,22 @@ func TestDB_TransactionManifestWriteError(t *testing.T) {
 	h.compactMem()
 
 	h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, errors.New("manifest write error"))
-	for i := 0; i < 2; i++ {
-		tr, err := h.db.OpenTransaction()
-		if err != nil {
-			t.Fatal("OpenTransaction: got error: ", err)
-		}
-		if err := tr.Put([]byte("foo"), []byte("baz"), nil); err != nil {
-			t.Fatal("Transaction.Put: got error: ", err)
-		}
+	tr, err := h.db.OpenTransaction()
+	if err != nil {
+		t.Fatal("OpenTransaction: got error: ", err)
+	}
+	if err := tr.Put([]byte("foo"), []byte("baz"), nil); err != nil {
+		t.Fatal("Transaction.Put: got error: ", err)
+	}
+	if err := tr.Commit(); err == nil {
+		t.Fatal("Transaction.Commit: expected error")
+	}
+	tr.Discard()
 
-		// The manifest writer keeps its error, so both commits fail.
-		if err := tr.Commit(); err == nil {
-			t.Fatal("Transaction.Commit: expected error")
-		}
-		tr.Discard()
+	// A compaction commits to the manifest under the same lock. The manifest
+	// writer keeps its error, so the compaction fails, but it must return.
+	if err := h.db.CompactRange(util.Range{}); err == nil {
+		t.Error("CompactRange: expected error")
 	}
 
 	h.db.Close()
@@ -1631,6 +1633,94 @@ func TestDB_OpenTransactionErrorReleasesWriteLock(t *testing.T) {
 	h.openDB()
 	h.getVal("a", "1")
 	h.getVal("b", "2")
+}
+
+// TestDB_TransactionManifestErrorStopsWrites ensures a transaction whose
+// MANIFEST commit fails moves the sequence to its own and stops every later
+// write until the DB is reopened, and that discarding it keeps its tables,
+// which the MANIFEST may list if the record reached the disk. The next open
+// keeps them if it does and removes them if not.
+func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		mode     testutil.StorageMode
+		recorded bool // whether the MANIFEST record reaches the disk
+	}{
+		{"write", testutil.ModeWrite, false},
+		{"sync", testutil.ModeSync, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newDbHarness(t)
+			defer h.close()
+
+			// Leave the memdb empty so opening the transaction does not
+			// commit to the MANIFEST itself.
+			h.put("a", "1")
+			h.compactMem()
+
+			h.stor.EmulateError(test.mode, storage.TypeManifest, errors.New("manifest error"))
+			tr, err := h.db.OpenTransaction()
+			if err != nil {
+				t.Fatal("OpenTransaction: got error: ", err)
+			}
+			if err := tr.Put([]byte("b"), []byte("2"), nil); err != nil {
+				t.Fatal("Transaction.Put: got error: ", err)
+			}
+			if err := tr.Commit(); err == nil {
+				t.Fatal("Transaction.Commit: expected error")
+			}
+			if got := h.db.getSeq(); got != tr.seq {
+				t.Errorf("sequence %d after the failed commit, want %d", got, tr.seq)
+			}
+			var trTables []storage.FileDesc
+			for _, t := range tr.tables {
+				trTables = append(trTables, t.fd)
+			}
+			// Listed rather than opened: the DB may hold a table open, and
+			// the test storage refuses to open a file twice.
+			exists := func(fd storage.FileDesc) bool {
+				fds, err := h.stor.List(storage.TypeTable)
+				if err != nil {
+					t.Fatal("List: got error: ", err)
+				}
+				for _, x := range fds {
+					if x == fd {
+						return true
+					}
+				}
+				return false
+			}
+			tr.Discard()
+			for _, fd := range trTables {
+				if !exists(fd) {
+					t.Errorf("table %v removed by Discard", fd)
+				}
+			}
+
+			if err := h.db.Put([]byte("c"), []byte("3"), nil); err == nil {
+				t.Error("put after a failed MANIFEST commit: expected error")
+			}
+			if tr, err := h.db.OpenTransaction(); err == nil {
+				tr.Discard()
+				t.Error("transaction after a failed MANIFEST commit: expected error")
+			}
+
+			h.db.Close()
+			h.stor.EmulateError(test.mode, storage.TypeManifest, nil)
+			h.openDB()
+			h.getVal("a", "1")
+			if test.recorded {
+				h.getVal("b", "2")
+			} else if _, err := h.db.Get([]byte("b"), nil); err != errors.ErrNotFound {
+				t.Errorf("get b = %v, want not found", err)
+			}
+			for _, fd := range trTables {
+				if kept := exists(fd); kept != test.recorded {
+					t.Errorf("table %v kept %v after reopen, want %v", fd, kept, test.recorded)
+				}
+			}
+		})
+	}
 }
 
 // TestSessionManifestRebuildThrottled ensures a MANIFEST whose snapshot is

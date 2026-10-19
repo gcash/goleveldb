@@ -29,6 +29,10 @@ type Transaction struct {
 	rec       sessionRecord
 	stats     cStatStaging
 	closed    bool
+
+	// keepTables is set when the commit failed after its record may have
+	// reached the MANIFEST, so Discard must not remove the tables.
+	keepTables bool
 }
 
 // Get gets the value for the given key. It returns ErrNotFound if the
@@ -187,7 +191,9 @@ func (tr *Transaction) setDone() {
 }
 
 // Commit commits the transaction. If error is not nil, then the transaction is
-// not committed, it can then either be retried or discarded.
+// not committed, it can then either be retried or discarded. After a failed
+// MANIFEST commit it can only be discarded, and writes stay stopped until the
+// DB is reopened.
 //
 // Other methods should not be called after transaction has been committed.
 func (tr *Transaction) Commit() error {
@@ -199,6 +205,9 @@ func (tr *Transaction) Commit() error {
 	defer tr.lk.Unlock()
 	if tr.closed {
 		return errTransactionDone
+	}
+	if tr.db.writeErr != nil {
+		return tr.db.writeErr
 	}
 	if err := tr.flush(); err != nil {
 		// Return error, lets user decide either to retry or discard
@@ -219,6 +228,9 @@ func (tr *Transaction) Commit() error {
 				case <-time.After(time.Second):
 				case <-tr.db.closeC:
 					tr.db.logf("transaction@commit exiting")
+					// The record may have reached the MANIFEST, so the
+					// tables must survive the discard on Close.
+					tr.keepTables = true
 					tr.db.compCommitLk.Unlock()
 					return cerr
 				}
@@ -234,9 +246,16 @@ func (tr *Transaction) Commit() error {
 			// and compaction blocks on it, and Close with them.
 			tr.db.compCommitLk.Unlock()
 
-			// Return error, lets user decide either to retry or discard
-			// transaction.
-			return cerr
+			// The record may have reached the MANIFEST anyway. Move the
+			// sequence past the transaction's so no later write reuses it,
+			// stop all writes until the DB is reopened, and keep the tables
+			// when the transaction is discarded: the next open keeps them
+			// if the MANIFEST lists them and removes them if not.
+			tr.db.setSeq(tr.seq)
+			tr.db.writeErr = &writesStoppedError{"MANIFEST commit", cerr}
+			tr.keepTables = true
+			tr.db.logf("transaction@commit %v", tr.db.writeErr)
+			return tr.db.writeErr
 		}
 
 		// Update compaction stats. This is safe as long as we hold compCommitLk.
@@ -258,6 +277,12 @@ func (tr *Transaction) Commit() error {
 func (tr *Transaction) discard() {
 	// Discard transaction.
 	for _, t := range tr.tables {
+		if tr.keepTables {
+			// The MANIFEST may list the table; the next open removes it
+			// if it does not.
+			tr.db.logf("transaction@discard keeping @%d", t.fd.Num)
+			continue
+		}
 		tr.db.logf("transaction@discard @%d", t.fd.Num)
 		// Iterator may still use the table, so we use tOps.remove here.
 		tr.db.s.tops.remove(t.fd)
