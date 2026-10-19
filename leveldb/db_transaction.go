@@ -233,6 +233,14 @@ func (tr *Transaction) Commit() error {
 		// since the MANIFEST takes no more records until the DB is reopened.
 		tr.rec.setSeqNum(tr.seq)
 		tr.db.compCommitLk.Lock()
+		// A compaction's failed MANIFEST commit can stop writes during the
+		// flush above. It stops them under compCommitLk, so this check is
+		// exact: the session would refuse the record unwritten, and the
+		// tables are still the transaction's to discard.
+		if err := tr.db.writesStopped(); err != nil {
+			tr.db.compCommitLk.Unlock()
+			return err
+		}
 		tr.stats.startTimer()
 		err := tr.db.s.commit(&tr.rec, false)
 		tr.stats.stopTimer()
@@ -291,8 +299,9 @@ func (tr *Transaction) discard() {
 // This method is noop if transaction is already closed (either committed or
 // discarded)
 //
-// After Commit fails with an error matching ErrWritesStopped, Discard only
-// releases the transaction; see Commit.
+// After the transaction's own MANIFEST commit fails, Discard keeps its
+// tables, which the MANIFEST may list, and only releases the transaction;
+// see Commit.
 //
 // Other methods should not be called after transaction has been discarded.
 func (tr *Transaction) Discard() {

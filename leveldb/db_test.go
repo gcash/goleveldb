@@ -1944,6 +1944,76 @@ func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
 	}
 }
 
+// pauseTableStorage, once armed, pauses the next table creation until
+// released, and reports when it gets there.
+type pauseTableStorage struct {
+	storage.Storage
+	armed   int32
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (s *pauseTableStorage) Create(fd storage.FileDesc) (storage.Writer, error) {
+	if fd.Type == storage.TypeTable && atomic.CompareAndSwapInt32(&s.armed, 1, 0) {
+		close(s.reached)
+		<-s.release
+	}
+	return s.Storage.Create(fd)
+}
+
+// TestDB_TransactionRefusedCommitDiscardsTables ensures a transaction whose
+// commit the session refuses unwritten, because a compaction's MANIFEST
+// commit failed while the transaction flushed its memdb, has its tables
+// removed by Discard. Commit kept them whenever the session returned an
+// error, as if its record might have reached the MANIFEST: they stayed until
+// the next open, and a Recover before then brought the transaction back.
+func TestDB_TransactionRefusedCommitDiscardsTables(t *testing.T) {
+	mem := storage.NewMemStorage()
+	defer mem.Close()
+	stor := &pauseTableStorage{Storage: mem, reached: make(chan struct{}), release: make(chan struct{})}
+	db, err := Open(stor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	tr, err := db.OpenTransaction()
+	if err != nil {
+		t.Fatal("OpenTransaction: got error: ", err)
+	}
+	if err := tr.Put([]byte("k"), []byte("v"), nil); err != nil {
+		t.Fatal("Transaction.Put: got error: ", err)
+	}
+
+	// Commit checks for a stop, then flushes its memdb to a table. Pause it
+	// there, and fail a compaction's MANIFEST commit meanwhile as
+	// compactionCommit does, under compCommitLk.
+	atomic.StoreInt32(&stor.armed, 1)
+	done := make(chan error, 1)
+	go func() { done <- tr.Commit() }()
+	<-stor.reached
+	db.compCommitLk.Lock()
+	db.s.manifestErr = errors.New("manifest error")
+	_ = db.stopWrites(&writesStoppedError{"MANIFEST commit", db.s.manifestErr})
+	db.compCommitLk.Unlock()
+	close(stor.release)
+
+	if err := <-done; !stderrors.Is(err, ErrWritesStopped) {
+		t.Fatalf("Commit after a compaction stopped writes = %v, want an ErrWritesStopped match", err)
+	}
+	if len(tr.tables) == 0 {
+		t.Fatal("the transaction made no tables, so the table check would prove nothing")
+	}
+	tr.Discard()
+	tables, err := mem.List(storage.TypeTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 0 {
+		t.Errorf("tables after Discard: %v, want none: the session never wrote the record", tables)
+	}
+}
+
 // TestSessionManifestRebuildThrottled ensures a MANIFEST whose snapshot is
 // already over MaxManifestFileSize is rebuilt only once it has doubled since
 // its last rebuild, not on every commit, and that the grown MANIFEST still
