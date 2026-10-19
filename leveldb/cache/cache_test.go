@@ -554,3 +554,37 @@ func TestLRUCache_Close(t *testing.T) {
 	require.Equal(t, 3, relFuncCalled)
 	require.Equal(t, 1, delFuncCalled)
 }
+
+// TestCacheEnumerateNodesOnce ensures walking the cache's nodes, as Close and
+// EvictAll do, visits each node once rather than once for every later bucket.
+func TestCacheEnumerateNodesOnce(t *testing.T) {
+	const n = 10000
+	c := NewCache(NewLRU(n))
+	var released int32
+	for i := 0; i < n; i++ {
+		set(c, 0, uint64(i), i, 1, func() { atomic.AddInt32(&released, 1) }).Release()
+	}
+	if b := len((*mHead)(atomic.LoadPointer(&c.mHead)).buckets); b < 2 {
+		t.Fatalf("%d buckets, want several", b)
+	}
+
+	seen := make(map[*Node]int)
+	c.enumerateNodesWithCB(func(nodes []*Node) {
+		for _, node := range nodes {
+			seen[node]++
+		}
+	})
+	if len(seen) != n {
+		t.Fatalf("enumerated %d nodes, want %d", len(seen), n)
+	}
+	for node, k := range seen {
+		if k != 1 {
+			t.Fatalf("node %d visited %d times, want once", node.key, k)
+		}
+	}
+
+	c.Close(true)
+	if got := atomic.LoadInt32(&released); got != n {
+		t.Errorf("%d values released by Close, want %d", got, n)
+	}
+}

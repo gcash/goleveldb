@@ -317,13 +317,17 @@ func (h *mHead) initBuckets() {
 	atomic.StorePointer(&h.predecessor, nil)
 }
 
+// enumerateNodesWithCB calls f with the nodes of each bucket in turn. f must
+// not keep the slice, which is reused for the next bucket.
 func (h *mHead) enumerateNodesWithCB(f func([]*Node)) {
 	var nodes []*Node
 	for x := range h.buckets {
 		b := h.initBucket(uint32(x))
 
 		b.mu.Lock()
-		nodes = append(nodes, b.nodes...)
+		// Only this bucket's nodes: accumulating them made Close and
+		// EvictAll visit each node once for every later bucket.
+		nodes = append(nodes[:0], b.nodes...)
 		b.mu.Unlock()
 		f(nodes)
 	}
