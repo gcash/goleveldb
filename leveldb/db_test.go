@@ -2224,7 +2224,6 @@ func TestDB_LeftoverJournalRemovedAfterFlush(t *testing.T) {
 	if len(journals) != 1 {
 		t.Errorf("journals after a later flush: %v, want only the current one", journals)
 	}
-
 	h.closeDB()
 	h.db, err = Recover(h.stor, h.o)
 	if err != nil {
@@ -2261,6 +2260,62 @@ func TestDB_CloseRemovesObsoleteTables(t *testing.T) {
 		t.Fatal("Recover: got error: ", err)
 	}
 	h.get("k", false)
+}
+
+// closeErrStorage reports an error from closing the first journal it creates,
+// after closing it, as close(2) does when a write-back fails.
+type closeErrStorage struct {
+	storage.Storage
+	created int32
+}
+
+func (s *closeErrStorage) Create(fd storage.FileDesc) (storage.Writer, error) {
+	w, err := s.Storage.Create(fd)
+	if err == nil && fd.Type == storage.TypeJournal && atomic.AddInt32(&s.created, 1) == 1 {
+		return closeErrWriter{w}, nil
+	}
+	return w, err
+}
+
+type closeErrWriter struct{ storage.Writer }
+
+func (w closeErrWriter) Close() error {
+	_ = w.Writer.Close()
+	return errors.New("journal close error")
+}
+
+// TestDB_JournalRotationCloseErrorStopsWrites ensures a rotation that fails to
+// close the old journal still switches to the new one, and stops writes until
+// the DB is reopened, since the old journal may have lost its last writes, as
+// LevelDB does. The rotation used to stop halfway, with writes going to a
+// journal the DB did not track, and every later rotation failing again.
+func TestDB_JournalRotationCloseErrorStopsWrites(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	db, err := Open(&closeErrStorage{Storage: stor}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("a"), []byte("1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	// Rotates the journal, whose close fails.
+	if err := db.CompactRange(util.Range{}); !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("CompactRange with a failing journal close = %v, want an ErrWritesStopped match", err)
+	}
+	if err := db.Put([]byte("b"), []byte("2"), nil); !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("put after a failed journal rotation = %v, want an ErrWritesStopped match", err)
+	}
+	db.Close()
+
+	db, err = Open(stor, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if v, err := db.Get([]byte("a"), nil); err != nil || string(v) != "1" {
+		t.Errorf("get a after reopen = %q, %v; want 1", v, err)
+	}
 }
 
 // TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers

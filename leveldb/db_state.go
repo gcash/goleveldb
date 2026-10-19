@@ -153,17 +153,27 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 	defer db.memMu.Unlock()
 
 	if db.frozenMem != nil {
+		// Leave neither the new journal nor its open file behind.
+		_ = w.Close()
+		if db.s.stor.Remove(fd) == nil {
+			db.s.reuseFileNum(fd.Num)
+		}
 		return nil, errHasFrozenMem
 	}
 
 	if db.journal == nil {
 		db.journal = journal.NewWriter(w)
 	} else {
-		if err := db.journal.Reset(w); err != nil {
-			return nil, err
+		// Switch to the new journal even if finishing the old one fails, as
+		// LevelDB does. The old journal may then have lost its last writes,
+		// so stop writes until the DB is reopened. The callers hold the write
+		// lock.
+		rerr := db.journal.Reset(w)
+		if cerr := db.journalWriter.Close(); rerr == nil {
+			rerr = cerr
 		}
-		if err := db.journalWriter.Close(); err != nil {
-			return nil, err
+		if rerr != nil {
+			err = db.stopWrites(&writesStoppedError{"journal rotation", rerr})
 		}
 		db.frozenJournalFd = db.journalFd
 	}
@@ -172,11 +182,14 @@ func (db *DB) newMem(n int) (mem *memDB, err error) {
 	db.frozenMem = db.mem
 	mem = db.mpoolGet(n)
 	mem.incref() // for self
-	mem.incref() // for caller
 	db.mem = mem
 	// The seq only incremented by the writer. And whoever called newMem
 	// should hold write lock, so no need additional synchronization here.
 	db.frozenSeq = db.seq
+	if err != nil {
+		return nil, err
+	}
+	mem.incref() // for caller
 	return
 }
 
