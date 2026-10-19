@@ -211,6 +211,9 @@ func (s *session) recover() (err error) {
 		return newErrManifestCorrupted(fd, "journal-file-num", "missing")
 	case !rec.has(recSeqNum):
 		return newErrManifestCorrupted(fd, "seq-num", "missing")
+	case maxSeq > keyMaxSeq:
+		// An internal key cannot hold it, so every read would panic.
+		return newErrManifestCorrupted(fd, "seq-num", "past the largest sequence number")
 	}
 
 	s.manifestFd = fd

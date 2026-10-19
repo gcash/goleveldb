@@ -2332,6 +2332,38 @@ func TestSessionCommitKeepsHighestSequence(t *testing.T) {
 	}
 }
 
+// TestDB_OpenRejectsSequencePastInternalKey ensures an open fails, as corrupt,
+// on a MANIFEST whose sequence is past what an internal key holds. The open
+// succeeded, and every read then panicked building its lookup key.
+func TestDB_OpenRejectsSequencePastInternalKey(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	o := &opt.Options{}
+	s, err := newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	rec := &sessionRecord{}
+	rec.setSeqNum(keyMaxSeq + 1)
+	if err := s.commit(rec, false); err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	s.release()
+
+	db, err := Open(stor, o)
+	if err == nil {
+		db.Close()
+		t.Fatal("open with a MANIFEST sequence past keyMaxSeq: expected an error")
+	}
+	if !errors.IsCorrupted(err) {
+		t.Errorf("open with a MANIFEST sequence past keyMaxSeq = %v, want a corruption error", err)
+	}
+}
+
 // TestSessionFirstCommitListsTablesOnce ensures the first commit after an
 // open, which starts a new MANIFEST with a snapshot of the version, lists each
 // table once in its record. The record is also the delta the reference loop
@@ -2854,6 +2886,53 @@ func TestDB_WriteFailsPastMaxSequence(t *testing.T) {
 	h.get("b", false)
 	if err := h.db.Put([]byte("b"), []byte("2"), nil); err != errSeqExhausted {
 		t.Errorf("put past the maximum sequence after reopen = %v, want %v", err, errSeqExhausted)
+	}
+
+	// Nor may a sequence far past the limit, which recovery refuses, wrap
+	// the check around.
+	h.db.setSeq(^uint64(0))
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); err != errSeqExhausted {
+		t.Errorf("put with the sequence at 2^64-1 = %v, want %v", err, errSeqExhausted)
+	}
+}
+
+// TestDB_TransactionWriteFailsWholePastMaxSequence ensures a transaction's
+// Write of a batch whose sequence numbers would pass the last usable one fails
+// whole, as a DB write does, and that a transaction put cannot wrap the check
+// around. Write applied the records that still fitted, and the transaction
+// stayed open with half the batch.
+func TestDB_TransactionWriteFailsWholePastMaxSequence(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.db.setSeq(keyMaxSeq - 3)
+	tr, err := h.db.OpenTransaction()
+	if err != nil {
+		t.Fatal("OpenTransaction: got error: ", err)
+	}
+	defer tr.Discard()
+	batch := func(keys ...string) *Batch {
+		b := new(Batch)
+		for _, k := range keys {
+			b.Put([]byte(k), []byte("v"))
+		}
+		return b
+	}
+
+	if err := tr.Write(batch("a", "b", "c", "d", "e"), nil); err != errSeqExhausted {
+		t.Errorf("transaction write past the maximum sequence = %v, want %v", err, errSeqExhausted)
+	}
+	if _, err := tr.Get([]byte("a"), nil); err != ErrNotFound {
+		t.Errorf("get a after the refused write = %v, want not found: none of the batch may apply", err)
+	}
+	// The last usable sequence number is keyMaxSeq-1, so two records fit.
+	if err := tr.Write(batch("f", "g"), nil); err != nil {
+		t.Errorf("transaction write up to the maximum sequence = %v, want nil", err)
+	}
+
+	tr.seq = ^uint64(0)
+	if err := tr.Put([]byte("h"), []byte("v"), nil); err != errSeqExhausted {
+		t.Errorf("transaction put with the sequence at 2^64-1 = %v, want %v", err, errSeqExhausted)
 	}
 }
 

@@ -236,8 +236,8 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 
 	// Fail before the journal if the batches would pass the last usable
 	// sequence number. Recovery moves the sequence one past a batch, so a
-	// batch must end below keyMaxSeq.
-	if db.seq+uint64(batchesLen(batches)) >= keyMaxSeq {
+	// batch must end below keyMaxSeq. The form cannot wrap around.
+	if n := uint64(batchesLen(batches)); n >= keyMaxSeq || db.seq >= keyMaxSeq-n {
 		db.unlockWrite(overflow, merged, errSeqExhausted)
 		return errSeqExhausted
 	}

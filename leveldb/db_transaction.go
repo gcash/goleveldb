@@ -119,8 +119,9 @@ func (tr *Transaction) flush() error {
 }
 
 func (tr *Transaction) put(kt keyType, key, value []byte) error {
-	// Keep to the sequence numbers a write can use, as writeLocked does.
-	if tr.seq+1 >= keyMaxSeq {
+	// Keep to the sequence numbers a write can use, as writeLocked does, in
+	// a form that cannot wrap around.
+	if tr.seq >= keyMaxSeq-1 {
 		return errSeqExhausted
 	}
 	tr.ikScratch = makeInternalKey(tr.ikScratch, key, tr.seq+1, kt)
@@ -189,6 +190,11 @@ func (tr *Transaction) Write(b *Batch, wo *opt.WriteOptions) error {
 	}
 	if err := tr.db.writesStopped(); err != nil {
 		return err
+	}
+	// Fail the whole batch, as a DB write does, if its sequence numbers
+	// would pass the last usable one: put checks only its own record.
+	if n := uint64(b.Len()); n >= keyMaxSeq || tr.seq >= keyMaxSeq-n {
+		return errSeqExhausted
 	}
 	return b.replayInternal(func(i int, kt keyType, k, v []byte) error {
 		return tr.put(kt, k, v)
