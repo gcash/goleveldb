@@ -2189,6 +2189,65 @@ func TestSessionFirstCommitListsTablesOnce(t *testing.T) {
 	}
 }
 
+// metaErrStorage, once armed, reports an error from SetMeta after it has
+// switched CURRENT, as a failed directory sync does.
+type metaErrStorage struct {
+	storage.Storage
+	fail bool
+}
+
+func (s *metaErrStorage) SetMeta(fd storage.FileDesc) error {
+	if err := s.Storage.SetMeta(fd); err != nil || !s.fail {
+		return err
+	}
+	s.fail = false
+	return errors.New("directory sync error")
+}
+
+// TestSessionManifestKeptAfterSetMetaError ensures a rotation whose SetMeta
+// fails keeps the new MANIFEST, which CURRENT may already name: it is complete
+// and synced by then. The cleanup used to remove it, and give its number
+// back, so CURRENT could name a file that no longer existed.
+func TestSessionManifestKeptAfterSetMetaError(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	ms := &metaErrStorage{Storage: stor}
+	o := &opt.Options{MaxManifestFileSize: 1}
+	s, err := newSession(ms, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	commit := func() error {
+		rec := &sessionRecord{}
+		rec.setSeqNum(1)
+		return s.commit(rec, false)
+	}
+	for s.manifest.Size() < 2*s.baseManifestSize {
+		if err := commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ms.fail = true
+	if err := commit(); err == nil {
+		t.Fatal("rotating commit with a failing SetMeta: expected error")
+	}
+	s.close()
+	s.release()
+
+	s, err = newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.recover(); err != nil {
+		t.Fatalf("recover after a failed SetMeta: %v", err)
+	}
+}
+
 // TestRecoverManifestListsTablesFirst ensures the MANIFEST that Recover
 // writes lists the recovered tables in its first record, since CURRENT names
 // the MANIFEST as soon as that record is written. Recover used to write an

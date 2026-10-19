@@ -419,6 +419,8 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 	s.fillRecord(rec, true)
 	v.fillRecord(rec)
 
+	// Set once SetMeta is tried: CURRENT may then name the new MANIFEST.
+	var metaTried bool
 	defer func() {
 		if err == nil {
 			s.recordCommited(rec)
@@ -437,6 +439,13 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 			s.baseManifestSize = jw.Size()
 		} else {
 			writer.Close()
+			// A failed SetMeta may have switched CURRENT already, for one
+			// when only the directory sync after the rename failed. The new
+			// MANIFEST is complete and synced by then, so keep it, and its
+			// number. The session takes no more commits after an error.
+			if metaTried {
+				return
+			}
 			if rerr := s.stor.Remove(fd); rerr != nil {
 				err = fmt.Errorf("newManifest error: %v, cleanup error (%v)", err, rerr)
 			}
@@ -462,6 +471,7 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 			return
 		}
 	}
+	metaTried = true
 	err = s.stor.SetMeta(fd)
 	return
 }
