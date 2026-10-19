@@ -16,30 +16,50 @@ jobs:
       matrix:
         go-version: [oldstable, stable]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
       # Vet also reports standard library APIs newer than the go line in
       # go.mod, so the declared minimum holds without building on it.
       - name: Vet
         run: go vet ./...
+      # The jobs run on Linux, so vet the files for other systems too.
+      - name: Vet other systems
+        run: |
+          GOOS=windows go vet ./...
+          GOOS=darwin go vet ./...
       # The timeouts are a few times the usual run time, so that a deadlock
-      # fails the run in minutes rather than an hour.
+      # fails the run in minutes rather than an hour. -count=1 keeps a re-run
+      # from reporting cached results.
       - name: Test
-        run: go test -short -timeout 15m ./...
+        run: go test -short -count=1 -timeout 15m ./...
       - name: Race test
-        run: go test -race -short -timeout 30m ./...
+        run: go test -race -short -count=1 -timeout 30m ./...
+
+  # A 32-bit build checks what a 64-bit one hides: the alignment 64-bit
+  # atomics need, and code that assumes a 64-bit int. The race detector does
+  # not support 386.
+  test-386:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - name: Test
+        run: GOARCH=386 go test -short -count=1 -timeout 15m ./...
 
   # golangci-lint checks the code against the Go it was built with, so it
   # runs on one fixed Go version. Bump the two together.
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.27.x'
       - name: Lint

@@ -22,6 +22,10 @@ func TestBatchHeader(t *testing.T) {
 	f := func(seq uint64, length uint32) bool {
 		encoded := encodeBatchHeader(nil, seq, int(length))
 		decSeq, decLength, err := decodeBatchHeader(encoded)
+		if int(length) < 0 {
+			// A 32-bit int cannot hold the count, which decoding rejects.
+			return err != nil
+		}
 		return err == nil && decSeq == seq && decLength == int(length)
 	}
 	config := &quick.Config{
