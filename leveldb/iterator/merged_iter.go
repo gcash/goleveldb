@@ -202,10 +202,13 @@ func (i *mergedIterator) Prev() bool {
 	case dirEOI:
 		return i.Last()
 	case dirForward:
+		// Move the current input last, since the others seek to its key.
+		// Then build the heap from scratch rather than assume the current
+		// input ends on top: an input written to between its Seek and its
+		// Prev or Last, like the live memdb, can end up above the key.
 		i.heap.Reset()
 		for x, iter := range i.iters {
 			if x == i.index {
-				i.heap.Add(x)
 				continue
 			}
 			seek := iter.Seek(i.keys[i.index])
@@ -219,7 +222,19 @@ func (i *mergedIterator) Prev() bool {
 				i.keys[x] = nil
 			}
 		}
+		x := i.index
+		iter := i.iters[x]
+		switch {
+		case iter.Prev():
+			i.keys[x] = assertKey(iter.Key())
+			i.heap.Add(x)
+		case i.iterErr(iter):
+			return false
+		default:
+			i.keys[x] = nil
+		}
 		i.heap.Init(true)
+		return i.prev()
 	}
 
 	x := i.index

@@ -9,6 +9,7 @@ package iterator_test
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -17,6 +18,7 @@ import (
 
 	"github.com/gcash/goleveldb/leveldb/comparer"
 	. "github.com/gcash/goleveldb/leveldb/iterator"
+	"github.com/gcash/goleveldb/leveldb/memdb"
 	"github.com/gcash/goleveldb/leveldb/testutil"
 )
 
@@ -142,6 +144,84 @@ func TestMergedIteratorRandomWalk(t *testing.T) {
 			}
 			mi.Release()
 		}
+	}
+}
+
+// insertAfterSeek wraps a memdb iterator and, once key is set, puts key into
+// the memdb right after the next Seek. It stands in for a writer whose Put
+// lands between a merged iterator's Seek and its Prev or Last on the memdb.
+type insertAfterSeek struct {
+	Iterator
+	db  *memdb.DB
+	key []byte
+}
+
+func (it *insertAfterSeek) Seek(key []byte) bool {
+	ok := it.Iterator.Seek(key)
+	if it.key != nil {
+		if err := it.db.Put(it.key, []byte("v")); err != nil {
+			panic(err)
+		}
+		it.key = nil
+	}
+	return ok
+}
+
+// TestMergedIteratorPrevWithConcurrentInsert ensures a Prev that turns a
+// merged iterator around keeps every input when a write leaves one of them
+// above the current key, as a Put into the live memdb can.
+func TestMergedIteratorPrevWithConcurrentInsert(t *testing.T) {
+	tests := []struct {
+		name string
+		mem  []string
+	}{
+		// Nothing in the memdb is at or after "c", so Last moves it.
+		{"seek finds nothing", []string{"b"}},
+		// Seek finds "e", so Prev moves it.
+		{"seek finds e", []string{"b", "e"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var table testutil.KeyValue
+			table.PutString("a", "v")
+			table.PutString("c", "v")
+			mem := memdb.New(comparer.DefaultComparer, 0)
+			for _, k := range test.mem {
+				if err := mem.Put([]byte(k), []byte("v")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			memIter := &insertAfterSeek{Iterator: mem.NewIterator(nil), db: mem}
+			mi := NewMergedIterator([]Iterator{NewArrayIterator(table), memIter},
+				comparer.DefaultComparer, true)
+			defer mi.Release()
+
+			// Move forward onto "c", which comes from the table, then have
+			// "d" land in the memdb while Prev turns around.
+			if !mi.Seek([]byte("c")) || string(mi.Key()) != "c" {
+				t.Fatalf("seek c: key %q", mi.Key())
+			}
+			memIter.key = []byte("d")
+
+			var got []string
+			for mi.Prev() {
+				key := mi.Key()
+				if key == nil {
+					t.Fatalf("valid position with a nil key after %q", got)
+				}
+				// "d" arrived during the walk, which may or may not return
+				// it. The DB iterator skips such keys by sequence number.
+				if string(key) != "d" {
+					got = append(got, string(key))
+				}
+			}
+			if err := mi.Error(); err != nil {
+				t.Fatal(err)
+			}
+			if want := []string{"b", "a"}; !reflect.DeepEqual(got, want) {
+				t.Errorf("walking back from c: got %q, want %q", got, want)
+			}
+		})
 	}
 }
 
