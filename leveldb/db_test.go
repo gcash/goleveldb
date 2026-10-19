@@ -3054,6 +3054,27 @@ func TestDB_NewRawIteratorDuringClose(t *testing.T) {
 	}
 }
 
+// TestDB_GetReturnsOwnCopyWithoutBufferPool ensures Get returns its own copy
+// of a value read from a table even with DisableBufferPool, as its doc
+// promises. Without the pool, the table reader handed out the cached block's
+// own bytes, so a caller changing them changed what every later read, and any
+// compaction of the table, saw.
+func TestDB_GetReturnsOwnCopyWithoutBufferPool(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{DisableBufferPool: true})
+	defer h.close()
+	h.put("k", "value")
+	h.compactMem()
+
+	v, err := h.db.Get([]byte("k"), nil)
+	if err != nil {
+		t.Fatal("Get: got error: ", err)
+	}
+	for i := range v {
+		v[i] = 'x'
+	}
+	h.getVal("k", "value")
+}
+
 // TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers
 // would pass what an internal key holds fails before it reaches the journal.
 // Recovery moves the sequence one past the last batch and rejects a batch
