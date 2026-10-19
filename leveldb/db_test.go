@@ -2131,6 +2131,64 @@ func TestSessionCommitKeepsHighestSequence(t *testing.T) {
 	}
 }
 
+// TestSessionFirstCommitListsTablesOnce ensures the first commit after an
+// open, which starts a new MANIFEST with a snapshot of the version, lists each
+// table once in its record. The record is also the delta the reference loop
+// counts, so a table listed twice kept a second reference that no compaction
+// dropped, and its file stayed until the next open.
+func TestSessionFirstCommitListsTablesOnce(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	o := &opt.Options{}
+	s, err := newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	ik := func(ukey string) internalKey {
+		return makeInternalKey(nil, []byte(ukey), 1, keyTypeVal)
+	}
+	rec := &sessionRecord{}
+	rec.setSeqNum(1)
+	rec.addTable(0, s.allocFileNum(), 1, ik("a"), ik("b"))
+	if err := s.commit(rec, false); err != nil {
+		t.Fatal(err)
+	}
+	s.close()
+	s.release()
+
+	s, err = newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.recover(); err != nil {
+		t.Fatal(err)
+	}
+	rec = &sessionRecord{}
+	rec.setSeqNum(2)
+	num := s.allocFileNum()
+	rec.addTable(0, num, 1, ik("c"), ik("d"))
+	if err := s.commit(rec, false); err != nil {
+		t.Fatal(err)
+	}
+	listed := map[int64]int{}
+	for _, at := range rec.addedTables {
+		listed[at.num]++
+	}
+	for n, k := range listed {
+		if k != 1 {
+			t.Errorf("the first commit after an open lists table %d %d times, want once", n, k)
+		}
+	}
+	if listed[num] != 1 || len(listed) != 2 {
+		t.Errorf("the first commit after an open lists tables %v, want the old one and %d", listed, num)
+	}
+}
+
 // TestRecoverManifestListsTablesFirst ensures the MANIFEST that Recover
 // writes lists the recovered tables in its first record, since CURRENT names
 // the MANIFEST as soon as that record is written. Recover used to write an

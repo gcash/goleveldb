@@ -283,10 +283,19 @@ func (v *version) spawn(r *sessionRecord, trivial bool) *version {
 	return staging.finish(trivial)
 }
 
+// fillRecord adds every table of v to r, except those r adds already, as the
+// first commit after an open does: the record is also the delta the
+// reference loop counts, and a table listed twice would never be removed.
 func (v *version) fillRecord(r *sessionRecord) {
+	adds := make(map[int64]bool, len(r.addedTables))
+	for _, t := range r.addedTables {
+		adds[t.num] = true
+	}
 	for level, tables := range v.levels {
 		for _, t := range tables {
-			r.addTableFile(level, t)
+			if !adds[t.fd.Num] {
+				r.addTableFile(level, t)
+			}
 		}
 	}
 }
