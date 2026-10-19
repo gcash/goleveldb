@@ -481,6 +481,9 @@ func (db *DB) CompactRange(r util.Range) error {
 }
 
 // SetReadOnly makes DB read-only. It will stay read-only until reopened.
+//
+// Once writes have stopped, SetReadOnly returns the error that stopped them
+// instead, and writes keep returning it.
 func (db *DB) SetReadOnly() error {
 	if err := db.ok(); err != nil {
 		return err
@@ -493,6 +496,13 @@ func (db *DB) SetReadOnly() error {
 		return err
 	case <-db.closeC:
 		return ErrClosed
+	}
+
+	// Writes that have stopped stay stopped with that error: report it
+	// rather than switching what writes get to ErrReadOnly.
+	if err := db.writesStopped(); err != nil {
+		<-db.writeLockC
+		return err
 	}
 
 	// Set compaction read-only, which hands the write lock over to the

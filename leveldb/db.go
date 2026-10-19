@@ -1249,6 +1249,9 @@ func (db *DB) SizeOf(ranges []util.Range) (Sizes, error) {
 // It is not safe to close a DB until all outstanding iterators are released.
 // It is valid to call Close multiple times. Other methods should not be
 // called after the DB has been closed.
+//
+// If writes have stopped, Close returns the error that stopped them: the
+// last writes may not have reached the disk.
 func (db *DB) Close() error {
 	if !db.setClosed() {
 		return ErrClosed
@@ -1284,13 +1287,22 @@ func (db *DB) Close() error {
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
 
+	// Report a stop, which the compaction error above may not carry: journal
+	// and transaction stops never reach the compaction error goroutine, nor
+	// does a compaction's once the DB is read-only. Nothing is left running
+	// that could stop writes now.
+	werr := db.writesStopped()
+	if werr != nil {
+		err = werr
+	}
+
 	// The session drops the table removals it has not got to, so once it is
 	// closed, remove the tables the current version no longer lists, as the
 	// next open would: Recover reads every table present, and would bring
 	// back what they held. After writes stopped, the version may not match
 	// the MANIFEST, so keep every table then.
 	var live map[int64]bool
-	if db.journal != nil && db.writesStopped() == nil {
+	if db.journal != nil && werr == nil {
 		live = db.liveTables()
 	}
 

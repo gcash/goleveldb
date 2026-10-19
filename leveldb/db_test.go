@@ -113,9 +113,16 @@ func (h *dbHarness) closeDB0() error {
 	return h.db.Close()
 }
 
+// closeErrExpected reports whether err is an error Close may return in a
+// test: ErrClosed for a second Close, or the error that stopped writes, which
+// the tests that stop them expect.
+func closeErrExpected(err error) bool {
+	return err == nil || err == ErrClosed || stderrors.Is(err, ErrWritesStopped)
+}
+
 func (h *dbHarness) closeDB() {
 	if h.db != nil {
-		if err := h.closeDB0(); err != nil && err != ErrClosed {
+		if err := h.closeDB0(); !closeErrExpected(err) {
 			h.t.Error("Close: got error: ", err)
 		}
 	}
@@ -132,7 +139,7 @@ func (h *dbHarness) reopenDB() {
 
 func (h *dbHarness) close() {
 	if h.db != nil {
-		if err := h.closeDB0(); err != nil && err != ErrClosed {
+		if err := h.closeDB0(); !closeErrExpected(err) {
 			h.t.Error("Close: got error: ", err)
 		}
 		h.db = nil
@@ -1659,6 +1666,60 @@ func TestDB_NoJournalRotationAfterStop(t *testing.T) {
 	if len(after) != len(before) {
 		t.Errorf("journals after the rotation: %v, want %v", after, before)
 	}
+}
+
+// TestDB_StopReportedBySetReadOnlyAndClose ensures SetReadOnly and Close
+// report that writes have stopped. After a journal failure, SetReadOnly
+// returned nil and switched what writes got to ErrReadOnly, and Close
+// returned nil after every stop the compaction error goroutine did not hold:
+// journal and transaction stops, and a compaction's after SetReadOnly.
+func TestDB_StopReportedBySetReadOnlyAndClose(t *testing.T) {
+	t.Run("stop before SetReadOnly", func(t *testing.T) {
+		h := newDbHarness(t)
+		defer h.close()
+
+		h.put("a", "1")
+		h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, errors.New("journal sync error"))
+		if err := h.db.Put([]byte("b"), []byte("2"), &opt.WriteOptions{Sync: true}); !stderrors.Is(err, ErrWritesStopped) {
+			t.Fatalf("put with a failing journal sync = %v, want an ErrWritesStopped match", err)
+		}
+		h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, nil)
+
+		if err := h.db.SetReadOnly(); !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("SetReadOnly after writes stopped = %v, want an ErrWritesStopped match", err)
+		}
+		if err := h.db.Put([]byte("c"), []byte("3"), nil); !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("put after SetReadOnly = %v, want an ErrWritesStopped match", err)
+		}
+		if err := h.db.Close(); !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("Close after writes stopped = %v, want an ErrWritesStopped match", err)
+		}
+	})
+
+	t.Run("stop after SetReadOnly", func(t *testing.T) {
+		h := newDbHarness(t)
+		defer h.close()
+
+		h.put("a", "1")
+		h.compactMem()
+		if err := h.db.SetReadOnly(); err != nil {
+			t.Fatal("SetReadOnly: got error: ", err)
+		}
+		// Compactions carry on in read-only mode; this one's commit fails.
+		// The command goes to the compaction goroutine directly: in
+		// read-only mode compTriggerRange can return ErrReadOnly before it
+		// is sent.
+		h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, errors.New("manifest write error"))
+		ack := make(chan error, 1)
+		h.db.tcompCmdC <- cRange{level: 0, ackC: ack}
+		if err := <-ack; !stderrors.Is(err, ErrWritesStopped) {
+			t.Fatalf("compaction with a failing MANIFEST write = %v, want an ErrWritesStopped match", err)
+		}
+		h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, nil)
+		if err := h.db.Close(); !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("Close after a compaction stopped writes = %v, want an ErrWritesStopped match", err)
+		}
+	})
 }
 
 // TestDB_ConcurrentSyncErrorStopsEveryWriter ensures that when journal syncs
