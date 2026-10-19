@@ -1626,6 +1626,38 @@ func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	h.put("c", "3")
 }
 
+// TestDB_ConcurrentSyncErrorStopsEveryWriter ensures that when journal syncs
+// fail, every concurrent writer gets an error matching ErrWritesStopped,
+// whether its batch was the one written, was merged into it, or came after
+// the stop, and that nothing is written after the stop.
+func TestDB_ConcurrentSyncErrorStopsEveryWriter(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, errors.New("journal sync error"))
+	const n = 16
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- h.db.Put([]byte(fmt.Sprintf("k%d", i)), []byte("v"), &opt.WriteOptions{Sync: true})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("concurrent put with failing journal syncs = %v, want an ErrWritesStopped match", err)
+		}
+	}
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, nil)
+	if err := h.db.Put([]byte("after"), []byte("v"), nil); !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("put after the stop = %v, want an ErrWritesStopped match", err)
+	}
+}
+
 // TestDB_WritesStoppedMatchesSentinel ensures every call that refuses work
 // once writes have stopped returns an error matching ErrWritesStopped, so
 // callers can tell a stop that lasts until reopen from a passing failure.

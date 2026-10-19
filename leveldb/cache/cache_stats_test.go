@@ -28,8 +28,8 @@ func TestGetStatsAfterClose(t *testing.T) {
 	}
 }
 
-// TestGetStatsConcurrentClose exercises the same path under the race detector,
-// where the window between the nil check and the read is what matters.
+// TestGetStatsConcurrentClose calls GetStats while Close runs, which must
+// neither panic nor race. The race detector covers the second part.
 func TestGetStatsConcurrentClose(t *testing.T) {
 	c := NewCache(NewLRU(2))
 

@@ -12,6 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         go-version: [oldstable, stable]
     steps:
@@ -20,13 +21,28 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
-      - name: Install golangci-lint
-        run: curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.14.0
+      # Vet also reports standard library APIs newer than the go line in
+      # go.mod, so the declared minimum holds without building on it.
       - name: Vet
         run: go vet ./...
-      - name: Lint
-        run: golangci-lint run
+      # The timeouts are a few times the usual run time, so that a deadlock
+      # fails the run in minutes rather than an hour.
       - name: Test
-        run: go test -short -timeout 1h ./...
+        run: go test -short -timeout 15m ./...
       - name: Race test
-        run: go test -timeout 30m -race -run "TestDB_(Concurrent|GoleveldbIssue74)" ./leveldb
+        run: go test -race -short -timeout 30m ./...
+
+  # golangci-lint checks the code against the Go it was built with, so it
+  # runs on one fixed Go version. Bump the two together.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+      - name: Lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.14.0
