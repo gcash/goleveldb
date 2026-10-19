@@ -1635,6 +1635,52 @@ func TestDB_OpenTransactionErrorReleasesWriteLock(t *testing.T) {
 	h.getVal("b", "2")
 }
 
+// TestDB_LargeWriteCommitErrorReleasesWriteLock ensures a Write large enough
+// to run as a transaction discards it when the commit fails, so the write
+// lock is released and later writes and Close do not block on it.
+func TestDB_LargeWriteCommitErrorReleasesWriteLock(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		ft      storage.FileType
+		stopped bool // whether the failure stops writes until reopen
+	}{
+		// The commit's flush fails to write the table.
+		{"table", storage.TypeTable, false},
+		// The commit fails to write its MANIFEST record.
+		{"manifest", storage.TypeManifest, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB})
+			defer h.close()
+
+			// One value over the write buffer, so the batch runs as a
+			// transaction that only its commit flushes to a table.
+			batch := new(Batch)
+			batch.Put([]byte("big"), bytes.Repeat([]byte{'x'}, 128*opt.KiB))
+			h.stor.EmulateError(testutil.ModeWrite, test.ft, errors.New("write error"))
+			if err := h.db.Write(batch, nil); err == nil {
+				t.Fatal("large write with a failing commit: expected error")
+			}
+			h.stor.EmulateError(testutil.ModeWrite, test.ft, nil)
+
+			// With the write lock still held, the Put and Close would block
+			// for good.
+			err := h.db.Put([]byte("a"), []byte("1"), nil)
+			if test.stopped {
+				if _, ok := err.(*writesStoppedError); !ok {
+					t.Errorf("put after a failed MANIFEST commit = %v, want writes stopped", err)
+				}
+			} else if err != nil {
+				t.Error("put after a failed table flush: got error: ", err)
+			}
+			if _, err := h.db.Get([]byte("big"), nil); err != errors.ErrNotFound {
+				t.Errorf("get big = %v, want not found", err)
+			}
+			h.db.Close()
+		})
+	}
+}
+
 // TestDB_TransactionManifestErrorStopsWrites ensures a transaction whose
 // MANIFEST commit fails moves the sequence to its own and stops every later
 // write until the DB is reopened, and that discarding it keeps its tables,

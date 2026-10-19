@@ -297,7 +297,12 @@ func (db *DB) Write(batch *Batch, wo *opt.WriteOptions) error {
 			tr.Discard()
 			return err
 		}
-		return tr.Commit()
+		// A failed commit leaves the transaction open, holding the write lock.
+		if err := tr.Commit(); err != nil {
+			tr.Discard()
+			return err
+		}
+		return nil
 	}
 
 	merge := !wo.GetNoWriteMerge() && !db.s.o.GetNoWriteMerge()
