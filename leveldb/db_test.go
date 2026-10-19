@@ -2212,6 +2212,38 @@ func TestDB_CloseRemovesObsoleteTables(t *testing.T) {
 	h.get("k", false)
 }
 
+// TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers
+// would pass what an internal key holds fails before it reaches the journal.
+// Recovery moves the sequence one past the last batch and rejects a batch
+// that leaves no room for that, so a write that took the very last number
+// was dropped at the next open, and the write after that panicked once
+// journaled, at every reopen.
+func TestDB_WriteFailsPastMaxSequence(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.db.setSeq(keyMaxSeq - 2)
+	h.put("a", "1")
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); err != errSeqExhausted {
+		t.Errorf("put past the maximum sequence = %v, want %v", err, errSeqExhausted)
+	}
+	tr, err := h.db.OpenTransaction()
+	if err != nil {
+		t.Fatal("OpenTransaction: got error: ", err)
+	}
+	if err := tr.Put([]byte("c"), []byte("3"), nil); err != errSeqExhausted {
+		t.Errorf("transaction put past the maximum sequence = %v, want %v", err, errSeqExhausted)
+	}
+	tr.Discard()
+
+	h.reopenDB()
+	h.getVal("a", "1")
+	h.get("b", false)
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); err != errSeqExhausted {
+		t.Errorf("put past the maximum sequence after reopen = %v, want %v", err, errSeqExhausted)
+	}
+}
+
 func assertErr(t *testing.T, err error, wanterr bool) {
 	if err != nil {
 		if wanterr {

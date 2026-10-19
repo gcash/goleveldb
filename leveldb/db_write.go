@@ -232,6 +232,14 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 		defer db.batchPool.Put(ourBatch)
 	}
 
+	// Fail before the journal if the batches would pass the last usable
+	// sequence number. Recovery moves the sequence one past a batch, so a
+	// batch must end below keyMaxSeq.
+	if db.seq+uint64(batchesLen(batches)) >= keyMaxSeq {
+		db.unlockWrite(overflow, merged, errSeqExhausted)
+		return errSeqExhausted
+	}
+
 	// Seq number.
 	seq := db.seq + 1
 

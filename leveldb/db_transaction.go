@@ -119,6 +119,10 @@ func (tr *Transaction) flush() error {
 }
 
 func (tr *Transaction) put(kt keyType, key, value []byte) error {
+	// Keep to the sequence numbers a write can use, as writeLocked does.
+	if tr.seq+1 >= keyMaxSeq {
+		return errSeqExhausted
+	}
 	tr.ikScratch = makeInternalKey(tr.ikScratch, key, tr.seq+1, kt)
 	if tr.mem.Free() < len(tr.ikScratch)+len(value) {
 		if err := tr.flush(); err != nil {

@@ -19,6 +19,10 @@ var (
 	ErrClosed           = errors.New("leveldb: closed")
 )
 
+// errSeqExhausted is returned by a write that would pass the largest
+// sequence number the DB can use.
+var errSeqExhausted = errors.New("leveldb: sequence numbers exhausted")
+
 // writesStoppedError reports a failure that leaves what is on disk unknown, a
 // journal sync or a MANIFEST commit, after which the DB stops all writes until
 // it is reopened.
