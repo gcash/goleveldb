@@ -1361,17 +1361,30 @@ func TestDB_CompactionTableOpenError(t *testing.T) {
 	}
 
 	h.stor.EmulateError(testutil.ModeOpen, storage.TypeTable, errors.New("open error during table compaction"))
+	// The compaction keeps failing on that error, which reaches its waiters
+	// and Close while it retries. The emulated error does not unwrap.
+	isOpenErr := func(err error) bool {
+		return err != nil && strings.Contains(err.Error(), "open error during table compaction")
+	}
+	db := h.db
+	done := make(chan struct{})
 	go func() {
-		if err := h.db.CompactRange(util.Range{}); err != nil && err != ErrClosed {
+		defer close(done)
+		// CompactRange may report the compaction's error, or ErrClosed once
+		// Close begins.
+		if err := db.CompactRange(util.Range{}); err != nil && err != ErrClosed && !isOpenErr(err) {
 			t.Error("CompactRange error: ", err)
 		}
 	}()
-	if err := h.db.compTriggerWait(h.db.tcompCmdC); err != nil {
+	if err := db.compTriggerWait(db.tcompCmdC); err != nil {
 		t.Log("compaction error: ", err)
 	}
-	if err := h.closeDB0(); err != nil {
+	if err := h.closeDB0(); err != nil && !isOpenErr(err) {
 		t.Error("Close: got error: ", err)
 	}
+	// Join the goroutine before the reopen replaces h.db: a CompactRange that
+	// starts only after Close returns ErrClosed without synchronizing with it.
+	<-done
 	h.openDB()
 	h.stor.EmulateError(testutil.ModeOpen, storage.TypeTable, nil)
 
