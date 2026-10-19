@@ -100,3 +100,36 @@ func (db *DB) checkAndCleanFiles() error {
 	}
 	return nil
 }
+
+// liveTables returns the file numbers of the tables the current version lists.
+func (db *DB) liveTables() map[int64]bool {
+	v := db.s.version()
+	defer v.release()
+	live := make(map[int64]bool)
+	for _, tables := range v.levels {
+		for _, t := range tables {
+			live[t.fd.Num] = true
+		}
+	}
+	return live
+}
+
+// removeObsoleteTables removes every table file not in live, as the janitor
+// does at open.
+func (db *DB) removeObsoleteTables(live map[int64]bool) {
+	fds, err := db.s.stor.List(storage.TypeTable)
+	if err != nil {
+		db.logf("db@close listing tables %q", err)
+		return
+	}
+	for _, fd := range fds {
+		if live[fd.Num] {
+			continue
+		}
+		if err := db.s.stor.Remove(fd); err != nil {
+			db.logf("db@close removing @%d %q", fd.Num, err)
+		} else {
+			db.logf("db@close removed @%d", fd.Num)
+		}
+	}
+}

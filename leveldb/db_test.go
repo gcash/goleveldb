@@ -2149,6 +2149,69 @@ func TestRecoverManifestListsTablesFirst(t *testing.T) {
 	}
 }
 
+// TestDB_LeftoverJournalRemovedAfterFlush ensures a journal that outlives its
+// flush, because removing it failed, is removed after a later flush. Recover
+// replays every journal present, so a leftover journal brought back a key
+// that was deleted and compacted away after the journal's flush.
+func TestDB_LeftoverJournalRemovedAfterFlush(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("k", "v")
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeJournal, errors.New("journal remove error"))
+	h.compactMem()
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeJournal, nil)
+
+	// Delete "k", then compact both it and the delete away.
+	h.delete("k")
+	h.compactMem()
+	h.compactRange("", "")
+	journals, err := h.stor.List(storage.TypeJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) != 1 {
+		t.Errorf("journals after a later flush: %v, want only the current one", journals)
+	}
+
+	h.closeDB()
+	h.db, err = Recover(h.stor, h.o)
+	if err != nil {
+		t.Fatal("Recover: got error: ", err)
+	}
+	h.get("k", false)
+}
+
+// TestDB_CloseRemovesObsoleteTables ensures Close removes the tables that
+// compactions replaced, which the session may not have got to yet, as the
+// next open would. Recover reads every table present, so a replaced table left
+// behind brought back what the compaction had dropped, deleted keys included.
+func TestDB_CloseRemovesObsoleteTables(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("k", "v")
+	h.compactMem()
+	h.delete("k")
+	h.compactMem()
+	h.compactRange("", "") // drops both the put and the delete
+
+	h.closeDB()
+	tables, err := h.stor.List(storage.TypeTable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) != 0 {
+		t.Errorf("tables after Close: %v, want none", tables)
+	}
+
+	h.db, err = Recover(h.stor, h.o)
+	if err != nil {
+		t.Fatal("Recover: got error: ", err)
+	}
+	h.get("k", false)
+}
+
 func assertErr(t *testing.T, err error, wanterr bool) {
 	if err != nil {
 		if wanterr {

@@ -227,15 +227,43 @@ func (db *DB) hasFrozenMem() bool {
 // Drop frozen memdb; assume that frozen memdb isn't nil.
 func (db *DB) dropFrozenMem() {
 	db.memMu.Lock()
-	if err := db.s.stor.Remove(db.frozenJournalFd); err != nil {
-		db.logf("journal@remove removing @%d %q", db.frozenJournalFd.Num, err)
-	} else {
-		db.logf("journal@remove removed @%d", db.frozenJournalFd.Num)
-	}
 	db.frozenJournalFd = storage.FileDesc{}
 	db.frozenMem.decref()
 	db.frozenMem = nil
 	db.memMu.Unlock()
+
+	// The flushed journal is now obsolete, with any older one an earlier
+	// flush failed to remove.
+	db.removeObsoleteJournals()
+}
+
+// removeObsoleteJournals removes every journal older than the oldest one in
+// use. A journal left behind by a failed removal must not outlive the next
+// try: Recover replays every journal present, so it would bring back what
+// was deleted after its flush.
+func (db *DB) removeObsoleteJournals() {
+	db.memMu.RLock()
+	inUse := db.journalFd.Num
+	if !db.frozenJournalFd.Zero() {
+		inUse = db.frozenJournalFd.Num
+	}
+	db.memMu.RUnlock()
+
+	fds, err := db.s.stor.List(storage.TypeJournal)
+	if err != nil {
+		db.logf("journal@remove listing %q", err)
+		return
+	}
+	for _, fd := range fds {
+		if fd.Num >= inUse {
+			continue
+		}
+		if err := db.s.stor.Remove(fd); err != nil {
+			db.logf("journal@remove removing @%d %q", fd.Num, err)
+		} else {
+			db.logf("journal@remove removed @%d", fd.Num)
+		}
+	}
 }
 
 // Clear mems ptr; used by DB.Close().

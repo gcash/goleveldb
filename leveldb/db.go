@@ -240,6 +240,10 @@ func OpenFile(path string, o *opt.Options) (db *DB, err error) {
 // The DB must already exist or it will returns an error.
 // Also, Recover will ignore ErrorIfMissing and ErrorIfExist options.
 //
+// Without a manifest, Recover cannot tell which journals were already
+// flushed, so it replays every journal file present, as LevelDB's RepairDB
+// does.
+//
 // The returned DB instance is safe for concurrent use.
 // The DB must be closed after use, by calling Close method.
 func Recover(stor storage.Storage, o *opt.Options) (db *DB, err error) {
@@ -1239,8 +1243,20 @@ func (db *DB) Close() error {
 	// Wait for all gorotines to exit.
 	db.closeW.Wait()
 
-	// Closes journal.
+	// The session drops the table removals it has not got to, so once it is
+	// closed, remove the tables the current version no longer lists, as the
+	// next open would: Recover reads every table present, and would bring
+	// back what they held. After writes stopped, the version may not match
+	// the MANIFEST, so keep every table then.
+	var live map[int64]bool
+	if db.journal != nil && db.writesStopped() == nil {
+		live = db.liveTables()
+	}
+
+	// Closes journal, after retrying the removal of any journal a flush
+	// failed to remove.
 	if db.journal != nil {
+		db.removeObsoleteJournals()
 		db.journal.Close()
 		db.journalWriter.Close()
 		db.journal = nil
@@ -1253,6 +1269,9 @@ func (db *DB) Close() error {
 
 	// Close session.
 	db.s.close()
+	if live != nil {
+		db.removeObsoleteTables(live)
+	}
 	db.logf("db@close done T·%v", time.Since(start))
 	db.s.release()
 
