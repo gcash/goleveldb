@@ -241,8 +241,16 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 		// manifest journal writer not yet created, create one
 		err = s.newManifest(r, nv)
 	} else if s.shouldRebuildManifest() {
-		// pass nil sessionRecord to avoid over-reference table file
-		err = s.newManifest(nil, nv)
+		// Start the new MANIFEST with a snapshot of the current version and
+		// append the record to it, as LevelDB does. Passing the record to
+		// newManifest would add every table of the version to it and leak
+		// them through setVersion (syndtr/goleveldb#409), and a snapshot of
+		// nv without it loses its journal number, sequence number and
+		// compaction pointers.
+		err = s.newManifest(nil, v)
+		if err == nil {
+			err = s.flushManifest(r)
+		}
 	} else {
 		err = s.flushManifest(r)
 	}

@@ -1571,8 +1571,9 @@ func TestSessionManifestRebuildThrottled(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// The size of the snapshot each rebuild starts the MANIFEST with.
 	const commits = 50
-	base := s.manifest.Size()
+	base := s.baseManifestSize
 	rebuilds := 0
 	for i := 1; i <= commits; i++ {
 		fd, size := s.manifestFd, s.manifest.Size()
@@ -1589,7 +1590,7 @@ func TestSessionManifestRebuildThrottled(t *testing.T) {
 				i, size, base)
 		}
 		rebuilds++
-		base = s.manifest.Size()
+		base = s.baseManifestSize
 	}
 	if rebuilds == 0 {
 		t.Fatal("the MANIFEST was never rebuilt")
@@ -1605,6 +1606,86 @@ func TestSessionManifestRebuildThrottled(t *testing.T) {
 	defer s.close()
 	if err := s.recover(); err != nil {
 		t.Fatal(err)
+	}
+	if s.stSeqNum != commits {
+		t.Fatalf("recovered sequence %d, want %d", s.stSeqNum, commits)
+	}
+}
+
+// TestSessionManifestRotationKeepsRecord ensures the commit that rotates the
+// MANIFEST still records its journal number, sequence number and tables, on
+// disk and in the session, and does not add the version's other tables to
+// its record, which leaked them (syndtr/goleveldb#409).
+func TestSessionManifestRotationKeepsRecord(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	o := &opt.Options{MaxManifestFileSize: 1}
+	s, err := newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+	ik := func(ukey string) internalKey {
+		return makeInternalKey(nil, []byte(ukey), 1, keyTypeVal)
+	}
+
+	// A table already in the version, then enough commits that the next
+	// one rotates the MANIFEST.
+	rec := &sessionRecord{}
+	rec.setSeqNum(1)
+	rec.addTable(1, s.allocFileNum(), 1, ik("x"), ik("y"))
+	if err := s.commit(rec, false); err != nil {
+		t.Fatal(err)
+	}
+	for s.manifest.Size() < 2*s.baseManifestSize {
+		rec := &sessionRecord{}
+		rec.setSeqNum(1)
+		if err := s.commit(rec, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	fd := s.manifestFd
+	rec = &sessionRecord{}
+	rec.setJournalNum(7)
+	rec.setSeqNum(100)
+	rec.addTable(0, s.allocFileNum(), 1, ik("a"), ik("b"))
+	if err := s.commit(rec, false); err != nil {
+		t.Fatal(err)
+	}
+	if s.manifestFd == fd {
+		t.Fatal("the commit did not rotate the MANIFEST")
+	}
+	if n := len(rec.addedTables); n != 1 {
+		t.Errorf("the rotating commit's record lists %d added tables, want 1", n)
+	}
+	if s.stJournalNum != 7 || s.stSeqNum != 100 {
+		t.Errorf("session journal %d sequence %d after the rotating commit, want 7 and 100",
+			s.stJournalNum, s.stSeqNum)
+	}
+	s.close()
+	s.release()
+
+	s, err = newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.recover(); err != nil {
+		t.Fatal(err)
+	}
+	if s.stJournalNum != 7 || s.stSeqNum != 100 {
+		t.Errorf("recovered journal %d sequence %d, want 7 and 100",
+			s.stJournalNum, s.stSeqNum)
+	}
+	v := s.version()
+	defer v.release()
+	if len(v.levels) < 2 || len(v.levels[0]) != 1 || len(v.levels[1]) != 1 {
+		t.Errorf("recovered tables per level %v, want one at level 0 and one at level 1",
+			v.levels)
 	}
 }
 
