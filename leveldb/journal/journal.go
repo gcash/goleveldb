@@ -149,7 +149,9 @@ type Reader struct {
 
 // NewReader returns a new reader. The dropper may be nil, and if
 // strict is true then corrupted or invalid chunk will halt the journal
-// reader entirely.
+// reader entirely. A record the end of the input cuts off, as a writer that
+// stopped mid-record leaves it, is dropped even then, as in LevelDB: reading
+// it returns io.ErrUnexpectedEOF if its first chunk was whole.
 func NewReader(r io.Reader, dropper Dropper, strict, checksum bool) *Reader {
 	return &Reader{
 		r:        r,
@@ -182,11 +184,16 @@ func (r *Reader) nextChunk(first bool) error {
 			length := binary.LittleEndian.Uint16(r.buf[r.j+4 : r.j+6])
 			chunkType := r.buf[r.j+6]
 			unprocBlock := r.n - r.j
+			// Only the input's last block can be short. A writer that stopped
+			// mid-record can leave a zero-filled header or a length past the
+			// end there, which drops the record without failing strict mode,
+			// as in LevelDB. In a full block, either is corruption.
+			lastBlock := r.n < blockSize
 			if checksum == 0 && length == 0 && chunkType == 0 {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
-				return r.corrupt(unprocBlock, "zero header", false)
+				return r.corrupt(unprocBlock, "zero header", lastBlock)
 			}
 			if chunkType < fullChunkType || chunkType > lastChunkType {
 				// Drop entire block.
@@ -200,7 +207,7 @@ func (r *Reader) nextChunk(first bool) error {
 				// Drop entire block.
 				r.i = r.n
 				r.j = r.n
-				return r.corrupt(unprocBlock, "chunk length overflows block", false)
+				return r.corrupt(unprocBlock, "chunk length overflows block", lastBlock)
 			} else if r.checksum && checksum != util.NewCRC(r.buf[r.i-1:r.j]).Value() {
 				// Drop entire block.
 				r.i = r.n
@@ -217,10 +224,12 @@ func (r *Reader) nextChunk(first bool) error {
 			return nil
 		}
 
-		// The last block.
+		// The last block. The input ending mid-record is what a writer that
+		// stopped mid-record leaves, so drop the record without failing
+		// strict mode, as in LevelDB.
 		if r.n < blockSize && r.n > 0 {
 			if !first {
-				return r.corrupt(0, "missing chunk part", false)
+				return r.corrupt(0, "missing chunk part", true)
 			}
 			r.err = io.EOF
 			return r.err
@@ -233,7 +242,7 @@ func (r *Reader) nextChunk(first bool) error {
 		}
 		if n == 0 {
 			if !first {
-				return r.corrupt(0, "missing chunk part", false)
+				return r.corrupt(0, "missing chunk part", true)
 			}
 			r.err = io.EOF
 			return r.err

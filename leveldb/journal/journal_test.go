@@ -20,6 +20,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/gcash/goleveldb/leveldb/errors"
 )
 
 type dropper struct {
@@ -851,5 +853,84 @@ func TestCorrupt_MiddleChuckLengthOverflow(t *testing.T) {
 
 	if _, err := r.Next(); err != io.EOF {
 		t.Fatalf("last next: unexpected error: %v", err)
+	}
+}
+
+// writeRecords frames records of the given sizes with a Writer, each filled
+// with a letter of its own.
+func writeRecords(t *testing.T, sizes ...int) []byte {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	w := NewWriter(buf)
+	for i, n := range sizes {
+		ww, err := w.Next()
+		require.NoError(t, err)
+		_, err = ww.Write(bytes.Repeat([]byte{byte('a' + i)}, n))
+		require.NoError(t, err)
+	}
+	require.NoError(t, w.Close())
+	return buf.Bytes()
+}
+
+// TestStrictReaderDropsRecordCutOffAtEOF ensures a strict reader drops a
+// record the end of its input cuts off, as a writer that stopped mid-record
+// leaves it, rather than failing: the records before it read, and then the
+// reader reports EOF, as LevelDB's does. It reported corruption, so after any
+// crash mid-write a strict open failed.
+func TestStrictReaderDropsRecordCutOffAtEOF(t *testing.T) {
+	midChunk := writeRecords(t, 100, 200)
+	// The second record's first chunk ends the first block.
+	boundary := writeRecords(t, blockSize-2*headerSize-50, 500)
+	for _, test := range []struct {
+		name string
+		data []byte
+		// Whether the cut record's first chunk is whole, so that Next
+		// returns the record and reading it reports the cut.
+		readCut bool
+	}{
+		{"cut mid-chunk", midChunk[:len(midChunk)-50], false},
+		{"cut at a block boundary", boundary[:blockSize], true},
+		{"zero-filled tail", append(writeRecords(t, 100), make([]byte, 64)...), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := NewReader(bytes.NewReader(test.data), dropper{t}, true, true)
+			rr, err := r.Next()
+			require.NoError(t, err)
+			_, err = io.Copy(io.Discard, rr)
+			require.NoError(t, err, "reading the record before the cut")
+			rr, err = r.Next()
+			if test.readCut {
+				require.NoError(t, err, "next after the first record")
+				if _, err := io.Copy(io.Discard, rr); err != io.ErrUnexpectedEOF {
+					t.Errorf("reading the cut record: %v, want %v", err, io.ErrUnexpectedEOF)
+				}
+				_, err = r.Next()
+			}
+			if err != io.EOF {
+				t.Errorf("next after the cut record: %v, want %v", err, io.EOF)
+			}
+		})
+	}
+}
+
+// TestStrictReaderFailsCorruptFullBlock ensures a strict reader still fails on
+// a damaged chunk in a full block, which no writer stopping mid-record leaves.
+func TestStrictReaderFailsCorruptFullBlock(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		corrupt func(b []byte)
+	}{
+		{"checksum mismatch", func(b []byte) { b[headerSize] ^= 0x01 }},
+		{"length overflows the block", func(b []byte) { binary.LittleEndian.PutUint16(b[4:6], 0xffff) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			// The second record fills the rest of the first block and more.
+			data := writeRecords(t, 100, blockSize)
+			test.corrupt(data)
+			r := NewReader(bytes.NewReader(data), dropper{t}, true, true)
+			if _, err := r.Next(); !errors.IsCorrupted(err) {
+				t.Errorf("next over the damaged chunk: %v, want a corruption error", err)
+			}
+		})
 	}
 }

@@ -131,6 +131,27 @@ func (s *session) create() error {
 	return s.newManifest(nil, nil)
 }
 
+// cutRecord reads a MANIFEST record and notes whether the journal reader cut
+// it short, which in strict mode it does only for a record the end of the file
+// cuts off. Decoding reports that as a short read, like a record whose own
+// content falls short, so it cannot tell the two apart.
+type cutRecord struct {
+	r   byteReader
+	cut bool
+}
+
+func (c *cutRecord) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.cut = c.cut || err == io.ErrUnexpectedEOF
+	return n, err
+}
+
+func (c *cutRecord) ReadByte() (byte, error) {
+	b, err := c.r.ReadByte()
+	c.cut = c.cut || err == io.ErrUnexpectedEOF
+	return b, err
+}
+
 // Recover a database session; need external synchronization.
 func (s *session) recover() (err error) {
 	defer func() {
@@ -183,10 +204,13 @@ func (s *session) recover() (err error) {
 		// the time it fails: a journal number among them made recovery skip
 		// the journal whose batches the record's table never got to hold.
 		one := &sessionRecord{}
-		err = one.decode(r)
+		cr := &cutRecord{r: r.(byteReader)} // the journal reader's records are byte readers
+		err = one.decode(cr)
 		if err != nil {
 			err = errors.SetFd(err, fd)
-			if strict || !errors.IsCorrupted(err) {
+			// A record the end of the file cuts off is a commit that never
+			// finished, which strict mode drops too, as LevelDB does.
+			if (strict && !cr.cut) || !errors.IsCorrupted(err) {
 				return
 			}
 			s.logf("manifest error: %v (skipped)", err)

@@ -134,6 +134,8 @@ const (
 	// If present then a corrupted or invalid chunk or block in manifest
 	// journal will cause an error instead of being dropped.
 	// This will prevent database with corrupted manifest to be opened.
+	// A last record the end of the file cuts off, which a commit that never
+	// finished leaves, is still dropped, as in LevelDB.
 	StrictManifest Strict = 1 << iota
 
 	// StrictJournalChecksum no longer has any effect. Journal recovery always
@@ -144,6 +146,8 @@ const (
 	// If present then a corrupted or invalid chunk or block in journal
 	// will cause an error instead of being dropped.
 	// This will prevent database with corrupted journal to be opened.
+	// A last record the end of the file cuts off, which a crash mid-write
+	// leaves, is still dropped, as in LevelDB.
 	StrictJournal
 
 	// If present then 'sorted table' block checksum will be verified.

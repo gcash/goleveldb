@@ -554,11 +554,19 @@ func TestJournalRecoveryBatchLengthOverflowSkipped(t *testing.T) {
 func TestManifestCutRecordAppliesNothing(t *testing.T) {
 	fixture := newRecoveryFixture(frozenSeqFixture)
 	dir := writeRecoveryFixture(t, fixture)
+	writeCutManifest(t, dir, fixture, true)
+	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, nil), wantFixtureKeys(firstJournalSeq))
+}
 
-	// Rewrite the MANIFEST: the fixture's record, a filler that brings the
-	// next record's header to the end of the first block, and a flush commit
-	// for a newer journal whose first chunk holds only its journal number and
-	// the next field's tag, cut at the block boundary.
+// writeCutManifest rewrites the fixture's MANIFEST in dir: the fixture's
+// record, then a flush commit for a newer journal that the end of the file
+// cuts off, as a commit whose write failed partway leaves it. With boundary,
+// a filler puts the commit across the first block boundary and the file ends
+// there, so the commit's first chunk holds only its journal number and the
+// next field's tag. Otherwise the commit sits in the first block, and the
+// file ends in its middle.
+func writeCutManifest(t *testing.T, dir string, fixture recoveryFixture, boundary bool) {
+	t.Helper()
 	const (
 		blockSize  = 32 * 1024
 		headerSize = 7
@@ -577,51 +585,102 @@ func TestManifestCutRecordAppliesNothing(t *testing.T) {
 	}
 	base := &sessionRecord{}
 	base.setComparer(fixtureComparator)
-	base.setJournalNum(fixtureJournalNum)
-	base.setNextFileNum(fixtureNextFileNum)
-	base.setSeqNum(frozenSeqFixture)
+	base.setJournalNum(int64(fixture.journalNum))
+	base.setNextFileNum(int64(fixture.nextFileNum))
+	base.setSeqNum(fixture.lastSequence)
 	put(base)
 
-	at := int64(blockSize - headerSize - firstChunk)
-	filler := func(keyLen int) *sessionRecord {
-		rec := &sessionRecord{}
-		rec.addCompPtr(1, makeInternalKey(nil, bytes.Repeat([]byte{'x'}, keyLen-8), 0, keyTypeVal))
-		return rec
-	}
-	want := int(at - w.Size() - headerSize)
-	keyLen := want
-	for ; keyLen > 8; keyLen-- {
-		var b bytes.Buffer
-		if err := filler(keyLen).encode(&b); err != nil {
-			t.Fatal(err)
+	if boundary {
+		at := int64(blockSize - headerSize - firstChunk)
+		filler := func(keyLen int) *sessionRecord {
+			rec := &sessionRecord{}
+			rec.addCompPtr(1, makeInternalKey(nil, bytes.Repeat([]byte{'x'}, keyLen-8), 0, keyTypeVal))
+			return rec
 		}
-		if b.Len() == want {
-			break
+		want := int(at - w.Size() - headerSize)
+		keyLen := want
+		for ; keyLen > 8; keyLen-- {
+			var b bytes.Buffer
+			if err := filler(keyLen).encode(&b); err != nil {
+				t.Fatal(err)
+			}
+			if b.Len() == want {
+				break
+			}
 		}
-	}
-	put(filler(keyLen))
-	if w.Size() != at {
-		t.Fatalf("layout: the cut record starts at %d, want %d", w.Size(), at)
+		put(filler(keyLen))
+		if w.Size() != at {
+			t.Fatalf("layout: the cut record starts at %d, want %d", w.Size(), at)
+		}
 	}
 
 	cut := &sessionRecord{}
-	cut.setJournalNum(fixtureJournalNum + 10)
-	cut.setNextFileNum(fixtureNextFileNum + 20)
+	cut.setJournalNum(int64(fixture.journalNum) + 10)
+	cut.setNextFileNum(int64(fixture.nextFileNum) + 20)
 	cut.setSeqNum(lastJournalSeq)
-	cut.addTable(0, fixtureNextFileNum+15, 1000,
+	cut.addTable(0, int64(fixture.nextFileNum)+15, 1000,
 		makeInternalKey(nil, []byte("a"), 1, keyTypeVal), makeInternalKey(nil, []byte("z"), 1, keyTypeVal))
 	put(cut)
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if buf.Len() <= blockSize {
-		t.Fatalf("layout: the cut record ends at %d, within the first block", buf.Len())
+	end := buf.Len() - 10
+	if boundary {
+		if buf.Len() <= blockSize {
+			t.Fatalf("layout: the cut record ends at %d, within the first block", buf.Len())
+		}
+		end = blockSize
 	}
-	if err := os.WriteFile(filepath.Join(dir, fixture.manifestName()), buf.Bytes()[:blockSize], 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, fixture.manifestName()), buf.Bytes()[:end], 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
 
-	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, nil), wantFixtureKeys(firstJournalSeq))
+// TestStrictManifestOpensAfterCutRecord ensures an open under StrictManifest
+// drops a last MANIFEST record the end of the file cuts off, a commit that
+// never finished, and recovers the state before it, as LevelDB does with
+// paranoid checks. It failed the open, so after a failed MANIFEST commit,
+// which stops writes until the DB is reopened, the reopen failed too.
+func TestStrictManifestOpensAfterCutRecord(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		boundary bool
+	}{
+		{"cut mid-chunk", false},
+		{"cut at a block boundary", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newRecoveryFixture(frozenSeqFixture)
+			dir := writeRecoveryFixture(t, fixture)
+			writeCutManifest(t, dir, fixture, test.boundary)
+			got := recoveredFixtureKeys(t, dir, &opt.Options{Strict: opt.StrictManifest})
+			assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq))
+		})
+	}
+}
+
+// TestStrictJournalOpensAfterCutRecord ensures an open under StrictJournal
+// drops a last journal batch the end of the file cuts off, as a crash
+// mid-write leaves it, and recovers every batch before it, as LevelDB does
+// with paranoid checks. It failed the open as corrupt.
+func TestStrictJournalOpensAfterCutRecord(t *testing.T) {
+	fixture := newRecoveryFixture(frozenSeqFixture)
+	dir := writeRecoveryFixture(t, fixture)
+	path := filepath.Join(dir, fixture.journalName())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last, err := fixtureEncodeBatch(fixture.batches[len(fixture.batches)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cut the last batch in half.
+	if err := os.WriteFile(path, data[:len(data)-len(last)/2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := recoveredFixtureKeys(t, dir, &opt.Options{Strict: opt.StrictJournal})
+	assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq)[:lastJournalSeq-firstJournalSeq])
 }
 
 // TestJournalRecoveryReadWriteOpenPreservesRecords covers what made the bug
