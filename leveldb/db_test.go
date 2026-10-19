@@ -1608,6 +1608,31 @@ func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	}
 }
 
+// TestDB_OpenTransactionErrorReleasesWriteLock ensures a transaction that
+// fails to open, here because flushing the memdb before it fails, releases
+// the write lock, so later writes and Close do not block on it.
+func TestDB_OpenTransactionErrorReleasesWriteLock(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("a", "1")
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, errors.New("table write error"))
+	if tr, err := h.db.OpenTransaction(); err == nil {
+		tr.Discard()
+		t.Fatal("open transaction with a failing memdb flush: expected error")
+	}
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, nil)
+
+	// With the write lock still held, these would block for good. Close
+	// reports the failed flush, which may not have been retried yet.
+	h.put("b", "2")
+	h.db.Close()
+
+	h.openDB()
+	h.getVal("a", "1")
+	h.getVal("b", "2")
+}
+
 // TestSessionManifestRebuildThrottled ensures a MANIFEST whose snapshot is
 // already over MaxManifestFileSize is rebuilt only once it has doubled since
 // its last rebuild, not on every commit, and that the grown MANIFEST still
