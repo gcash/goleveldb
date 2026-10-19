@@ -2435,6 +2435,31 @@ func TestDB_JournalRotationCloseErrorStopsWrites(t *testing.T) {
 	}
 }
 
+// TestDB_WriteLandsWhenRotationAfterItFails ensures a write that fills the
+// memdb succeeds when rotating the memdb after it fails: by then it is in
+// the journal and the memdb. It used to report the rotation's error, for it
+// and every write merged with it, though they had all landed. A later write
+// that needs room retries the rotation before writing anything.
+func TestDB_WriteLandsWhenRotationAfterItFails(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB, DisableLargeBatchTransaction: true})
+	defer h.close()
+
+	// A Put larger than the write buffer fills the memdb, so the memdb
+	// rotates right after it, and creating the new journal fails.
+	big := strings.Repeat("x", 128*opt.KiB)
+	h.stor.EmulateError(testutil.ModeCreate, storage.TypeJournal, errors.New("journal create error"))
+	if err := h.db.Put([]byte("big"), []byte(big), nil); err != nil {
+		t.Errorf("put whose rotation after it fails = %v, want nil: it landed", err)
+	}
+	h.getVal("big", big)
+	h.stor.EmulateError(testutil.ModeCreate, storage.TypeJournal, nil)
+
+	h.put("a", "1")
+	h.reopenDB()
+	h.getVal("big", big)
+	h.getVal("a", "1")
+}
+
 // TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers
 // would pass what an internal key holds fails before it reaches the journal.
 // Recovery moves the sequence one past the last batch and rejects a batch

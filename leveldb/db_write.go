@@ -270,11 +270,12 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// Incr seq number.
 	db.addSeq(uint64(batchesLen(batches)))
 
-	// Rotate memdb if it's reach the threshold.
+	// Rotate memdb if it's reach the threshold. The batches have landed by
+	// now, so a failed rotation is not their failure: the next write that
+	// needs room retries it before writing anything.
 	if batch.internalLen >= mdbFree {
 		if _, err := db.rotateMem(0, false); err != nil {
-			db.unlockWrite(overflow, merged, err)
-			return err
+			db.logf("memdb@rotate after a write failed %q", err)
 		}
 	}
 
