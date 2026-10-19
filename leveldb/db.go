@@ -585,6 +585,10 @@ func (db *DB) recoverJournal() error {
 
 			// Replay journal to memdb.
 			mdb.Reset()
+			var (
+				below  int    // batches below the sequence recovery had reached
+				lowest uint64 // the lowest of them
+			)
 			for {
 				r, err := jr.Next()
 				if err != nil {
@@ -620,9 +624,14 @@ func (db *DB) recoverJournal() error {
 
 				// Replay it as the reference does, but leave a trace: a batch
 				// below the sequence recovery has reached was once rejected
-				// as corrupt, and may be a stale or misordered record.
+				// as corrupt, and may be a stale or misordered record. One
+				// LOG line per journal reports them, so that a large journal
+				// cannot flood the LOG.
 				if batchSeq < db.seq {
-					db.s.logf("journal@recovery batch Q·%d below the recovered sequence Q·%d, replayed", batchSeq, db.seq)
+					if below == 0 || batchSeq < lowest {
+						lowest = batchSeq
+					}
+					below++
 				}
 
 				// Save sequence number. Only ever raise it: a journal may hold
@@ -642,6 +651,9 @@ func (db *DB) recoverJournal() error {
 
 					mdb.Reset()
 				}
+			}
+			if below > 0 {
+				db.s.logf("journal@recovery @%d replayed N·%d batches below the recovered sequence, lowest Q·%d, recovered Q·%d", fd.Num, below, lowest, db.seq)
 			}
 
 			fr.Close()
@@ -737,6 +749,10 @@ func (db *DB) recoverJournalRO() error {
 			}
 
 			// Replay journal to memdb.
+			var (
+				below  int    // batches below the sequence recovery had reached
+				lowest uint64 // the lowest of them
+			)
 			for {
 				r, err := jr.Next()
 				if err != nil {
@@ -772,9 +788,14 @@ func (db *DB) recoverJournalRO() error {
 
 				// Replay it as the reference does, but leave a trace: a batch
 				// below the sequence recovery has reached was once rejected
-				// as corrupt, and may be a stale or misordered record.
+				// as corrupt, and may be a stale or misordered record. One
+				// LOG line per journal reports them, so that a large journal
+				// cannot flood the LOG.
 				if batchSeq < db.seq {
-					db.s.logf("journal@recovery batch Q·%d below the recovered sequence Q·%d, replayed", batchSeq, db.seq)
+					if below == 0 || batchSeq < lowest {
+						lowest = batchSeq
+					}
+					below++
 				}
 
 				// Save sequence number. Only ever raise it: a journal may hold
@@ -784,6 +805,9 @@ func (db *DB) recoverJournalRO() error {
 				if end := batchSeq + uint64(batchLen); end > db.seq {
 					db.seq = end
 				}
+			}
+			if below > 0 {
+				db.s.logf("journal@recovery @%d replayed N·%d batches below the recovered sequence, lowest Q·%d, recovered Q·%d", fd.Num, below, lowest, db.seq)
 			}
 
 			fr.Close()

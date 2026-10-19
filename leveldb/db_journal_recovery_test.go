@@ -473,10 +473,14 @@ func TestJournalRecoveryDiscardsNothing(t *testing.T) {
 		}
 	}
 
-	// Batches 11 to 14 are below the manifest's sequence of 15.
-	if n := strings.Count(string(logBytes), "below the recovered sequence"); n != liveSeqFixture-firstJournalSeq {
-		t.Errorf("LOG reports %d batches below the recovered sequence, want %d:\n%s",
-			n, liveSeqFixture-firstJournalSeq, logBytes)
+	// Batches 11 to 14 are below the manifest's sequence of 15. One line
+	// reports them for the journal, so a large journal cannot flood the LOG.
+	want := fmt.Sprintf("replayed N·%d batches below the recovered sequence, lowest Q·%d",
+		liveSeqFixture-firstJournalSeq, firstJournalSeq)
+	if n := strings.Count(string(logBytes), "below the recovered sequence"); n != 1 ||
+		!strings.Contains(string(logBytes), want) {
+		t.Errorf("LOG reports batches below the recovered sequence in %d lines, want one with %q:\n%s",
+			n, want, logBytes)
 	}
 }
 
