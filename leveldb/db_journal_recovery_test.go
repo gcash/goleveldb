@@ -631,7 +631,8 @@ func TestJournalRecoveryDeleteBelowManifestSequence(t *testing.T) {
 
 // TestJournalRecoveryAcrossTwoJournals ensures batches below the manifest's
 // sequence are recovered from every journal it names, across the commit
-// recovery makes between journals.
+// recovery makes between journals. The read-only open comes first, so that it
+// replays both journals: it used to fail with EOF on the second one.
 func TestJournalRecoveryAcrossTwoJournals(t *testing.T) {
 	fixture := newRecoveryFixture(30)
 	fixture.nextFileNum = fixtureJournalNum + 2
@@ -642,7 +643,7 @@ func TestJournalRecoveryAcrossTwoJournals(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, nil), wantFixtureKeys(firstJournalSeq))
 	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, &opt.Options{ReadOnly: true}),
 		wantFixtureKeys(firstJournalSeq))
+	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, nil), wantFixtureKeys(firstJournalSeq))
 }

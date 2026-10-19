@@ -741,13 +741,13 @@ func (db *DB) recoverJournalRO() error {
 				return err
 			}
 
-			// Create or reset journal reader instance.
+			// Create or reset journal reader instance. Reset returns the
+			// previous journal's error, at best its EOF, which Next already
+			// reported, so ignore it as recoverJournal does.
 			if jr == nil {
 				jr = journal.NewReader(fr, dropper{db.s, fd}, strict, checksum)
 			} else {
-				if err := jr.Reset(fr, dropper{db.s, fd}, strict, checksum); err != nil {
-					return err
-				}
+				_ = jr.Reset(fr, dropper{db.s, fd}, strict, checksum)
 			}
 
 			// Replay journal to memdb.
