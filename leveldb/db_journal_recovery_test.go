@@ -400,12 +400,54 @@ func TestJournalRecoveryBelowManifestSequence(t *testing.T) {
 // TestJournalRecoveryStrictAcceptsBelowManifestSequence guards against the fix
 // being mistaken for leniency. Before it, opening this fixture under
 // opt.StrictJournal failed with "invalid sequence number", the same rejection
-// DefaultStrict turned into a silent skip. The batches are not corrupt, so the
-// strictest setting must accept them and return everything.
+// DefaultStrict turned into a silent skip. The batches are not corrupt, so
+// strict journal recovery must accept them and return everything.
 func TestJournalRecoveryStrictAcceptsBelowManifestSequence(t *testing.T) {
 	dir := writeRecoveryFixture(t, newRecoveryFixture(liveSeqFixture))
 	got := recoveredFixtureKeys(t, dir, &opt.Options{ReadOnly: true, Strict: opt.StrictJournal})
 	assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq))
+}
+
+// TestJournalRecoveryAlwaysVerifiesChecksums ensures recovery verifies journal
+// checksums whatever opt.Strict holds, as LevelDB's RecoverLogFile does, so a
+// corrupted batch is dropped, or fails the open under StrictJournal, rather
+// than replayed. Any Strict value without StrictJournalChecksum, NoStrict
+// included, used to turn checksums off, so a batch whose sequence a bit flip
+// had changed was applied at the wrong sequence.
+func TestJournalRecoveryAlwaysVerifiesChecksums(t *testing.T) {
+	// Flip a bit in the last batch's sequence, which leaves its checksum
+	// stale. The last batch ends the journal file.
+	corrupted := func(t *testing.T) string {
+		fixture := newRecoveryFixture(frozenSeqFixture)
+		dir := writeRecoveryFixture(t, fixture)
+		path := filepath.Join(dir, fixture.journalName())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		last, err := fixtureEncodeBatch(fixture.batches[len(fixture.batches)-1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		data[len(data)-len(last)] ^= 0x10 // sequence 20 becomes 4
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	for _, strict := range []opt.Strict{opt.NoStrict, opt.StrictManifest} {
+		got := recoveredFixtureKeys(t, corrupted(t), &opt.Options{Strict: strict})
+		assertFixtureKeys(t, got, wantFixtureKeys(firstJournalSeq)[:lastJournalSeq-firstJournalSeq])
+	}
+
+	db, err := OpenFile(corrupted(t), &opt.Options{Strict: opt.StrictJournal})
+	if err == nil {
+		db.Close()
+		t.Error("open with a corrupted journal under StrictJournal: expected error")
+	} else if !errors.IsCorrupted(err) {
+		t.Errorf("open with a corrupted journal under StrictJournal = %v, want a corruption error", err)
+	}
 }
 
 // TestJournalRecoveryReadWriteOpenPreservesRecords covers what made the bug

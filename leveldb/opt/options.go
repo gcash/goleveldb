@@ -136,7 +136,9 @@ const (
 	// This will prevent database with corrupted manifest to be opened.
 	StrictManifest Strict = 1 << iota
 
-	// If present then journal chunk checksum will be verified.
+	// StrictJournalChecksum no longer has any effect. Journal recovery always
+	// verifies chunk checksums, as LevelDB does, so that a corrupted batch is
+	// dropped, or fails the open under StrictJournal, rather than replayed.
 	StrictJournalChecksum
 
 	// If present then a corrupted or invalid chunk or block in journal

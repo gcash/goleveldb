@@ -531,9 +531,11 @@ func (db *DB) recoverJournal() error {
 		db.s.markFileNum(fds[len(fds)-1].Num)
 
 		var (
-			// Options.
+			// Options. Checksums are always verified, as LevelDB's
+			// RecoverLogFile does, so that a corrupted batch is dropped
+			// rather than replayed; see opt.StrictJournalChecksum.
 			strict      = db.s.o.GetStrict(opt.StrictJournal)
-			checksum    = db.s.o.GetStrict(opt.StrictJournalChecksum)
+			checksum    = true
 			writeBuffer = db.s.o.GetWriteBuffer()
 
 			jr       *journal.Reader
@@ -712,9 +714,9 @@ func (db *DB) recoverJournalRO() error {
 	}
 
 	var (
-		// Options.
+		// Options. Checksums are always verified, as in recoverJournal.
 		strict      = db.s.o.GetStrict(opt.StrictJournal)
-		checksum    = db.s.o.GetStrict(opt.StrictJournalChecksum)
+		checksum    = true
 		writeBuffer = db.s.o.GetWriteBuffer()
 
 		mdb = memdb.New(db.s.icmp, writeBuffer)
