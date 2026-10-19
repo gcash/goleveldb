@@ -131,11 +131,12 @@ const (
 type Strict uint
 
 const (
-	// If present then a corrupted or invalid chunk or block in manifest
-	// journal will cause an error instead of being dropped.
-	// This will prevent database with corrupted manifest to be opened.
-	// A last record the end of the file cuts off, which a commit that never
-	// finished leaves, is still dropped, as in LevelDB.
+	// StrictManifest no longer has any effect. MANIFEST recovery is always
+	// strict, as in LevelDB: a corrupted record fails the open, since
+	// skipping it could leave out tables it added, for the open to remove.
+	// Recover rebuilds such a DB from its tables. A last record the end of
+	// the file cuts off, which a commit that never finished leaves, is still
+	// dropped.
 	StrictManifest Strict = 1 << iota
 
 	// StrictJournalChecksum no longer has any effect. Journal recovery always

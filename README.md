@@ -26,6 +26,14 @@ Besides bug fixes, the behavior differs from syndtr/goleveldb in these ways:
 - Journal recovery replays every batch, even those below the MANIFEST's
   sequence, and always verifies checksums, as LevelDB does.
   `opt.StrictJournalChecksum` no longer has any effect.
+- MANIFEST recovery is always strict, as in LevelDB: a corrupted MANIFEST
+  record fails the open instead of being skipped, and `opt.StrictManifest`
+  no longer has any effect. A last record that a crash cut off, a commit
+  that never finished, is still dropped. Use `Recover` to rebuild a DB whose
+  MANIFEST is corrupted.
+- Under `opt.StrictJournal`, a last journal record that a crash cut off is
+  dropped, as in LevelDB, instead of failing the open. A strict
+  `journal.Reader` drops it too, instead of halting.
 
 ## Requirements
 

@@ -2659,6 +2659,73 @@ func TestRecoverManifestOutnumbersPendingCurrent(t *testing.T) {
 	}
 }
 
+// TestDB_CorruptManifestRecordFailsOpen ensures an open fails, as corrupt, on
+// a MANIFEST record whose checksum does not match, whatever the Strict option,
+// as LevelDB's does, so that Recover can rebuild the DB from its tables. The
+// open skipped the record unless the option held StrictManifest, which the
+// default did not, and when the record was a memdb flush's, the janitor then
+// removed the flushed table, whose journal was already gone: its keys were
+// lost without an error, for Recover too.
+func TestDB_CorruptManifestRecordFailsOpen(t *testing.T) {
+	dir := t.TempDir()
+	o := &opt.Options{WriteBuffer: 64 * opt.KiB}
+	db, err := OpenFile(dir, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := func(i int) []byte { return []byte(fmt.Sprintf("k%03d", i)) }
+	value := bytes.Repeat([]byte{'v'}, opt.KiB)
+	// Pass the write buffer, so that a flush writes a table and its record
+	// ends the MANIFEST.
+	const n = 100
+	for i := 0; i < n; i++ {
+		if err := db.Put(key(i), value, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.compTriggerWait(db.mcompCmdC); err != nil {
+		t.Fatal("waiting for the flush: ", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Flip a bit in the flush's record, which ends the MANIFEST.
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, strings.TrimSpace(string(current)))
+	manifest, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest[len(manifest)-1] ^= 0x01
+	if err := os.WriteFile(path, manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, strict := range []opt.Strict{opt.DefaultStrict, opt.NoStrict} {
+		if db, err := OpenFile(dir, &opt.Options{Strict: strict}); err == nil {
+			db.Close()
+			t.Fatalf("open under Strict %#x with a corrupt MANIFEST record: expected a corruption error", strict)
+		} else if !errors.IsCorrupted(err) {
+			t.Fatalf("open under Strict %#x with a corrupt MANIFEST record = %v, want a corruption error", strict, err)
+		}
+	}
+
+	db, err = RecoverFile(dir, o)
+	if err != nil {
+		t.Fatal("Recover: ", err)
+	}
+	defer db.Close()
+	for i := 0; i < n; i++ {
+		if _, err := db.Get(key(i), nil); err != nil {
+			t.Fatalf("get %s after Recover: %v", key(i), err)
+		}
+	}
+}
+
 // TestDB_LeftoverJournalRemovedAfterFlush ensures a journal that outlives its
 // flush, because removing it failed, is removed after a later flush. Recover
 // replays every journal present, so a leftover journal brought back a key
