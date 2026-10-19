@@ -142,6 +142,12 @@ func (db *DB) mpoolDrain() {
 // Create new memdb and froze the old one; need external synchronization.
 // newMem only called synchronously by the writer.
 func (db *DB) newMem(n int) (mem *memDB, err error) {
+	// A rotation starts a memdb flush, and flushes stop along with writes,
+	// so once writes have stopped, create no journal.
+	if err := db.writesStopped(); err != nil {
+		return nil, err
+	}
+
 	fd := storage.FileDesc{Type: storage.TypeJournal, Num: db.s.allocFileNum()}
 	w, err := db.s.stor.Create(fd)
 	if err != nil {

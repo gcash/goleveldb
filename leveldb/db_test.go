@@ -1626,6 +1626,41 @@ func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	h.put("c", "3")
 }
 
+// TestDB_NoJournalRotationAfterStop ensures a memdb rotation creates no
+// journal once writes have stopped, as CompactRange and the write path can
+// attempt after their own check for a stop. The rotation went ahead, leaving
+// a new journal and a frozen memdb the stopped compactions never flushed.
+func TestDB_NoJournalRotationAfterStop(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("a", "1")
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeJournal, errors.New("journal write error"))
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); !stderrors.Is(err, ErrWritesStopped) {
+		t.Fatalf("put with a failing journal write = %v, want an ErrWritesStopped match", err)
+	}
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeJournal, nil)
+	before, err := h.stor.List(storage.TypeJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rotate as CompactRange does once past its check.
+	h.db.writeLockC <- struct{}{}
+	_, err = h.db.rotateMem(0, false)
+	<-h.db.writeLockC
+	if !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("rotation after writes stopped = %v, want an ErrWritesStopped match", err)
+	}
+	after, err := h.stor.List(storage.TypeJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("journals after the rotation: %v, want %v", after, before)
+	}
+}
+
 // TestDB_ConcurrentSyncErrorStopsEveryWriter ensures that when journal syncs
 // fail, every concurrent writer gets an error matching ErrWritesStopped,
 // whether its batch was the one written, was merged into it, or came after
