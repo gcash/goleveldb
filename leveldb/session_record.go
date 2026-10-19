@@ -101,7 +101,7 @@ func (p *sessionRecord) addCompPtr(level int, ikey internalKey) {
 	p.compPtrs = append(p.compPtrs, cpRecord{level, ikey})
 }
 
-func (p *sessionRecord) resetCompPtrs() {
+func (p *sessionRecord) resetCompPtrs() { //nolint:unused // pairs with addCompPtr; recover now decodes each record afresh
 	p.hasRec &= ^(1 << recCompPtr)
 	p.compPtrs = p.compPtrs[:0]
 }
@@ -125,7 +125,7 @@ func (p *sessionRecord) delTable(level int, num int64) {
 	p.deletedTables = append(p.deletedTables, dtRecord{level, num})
 }
 
-func (p *sessionRecord) resetDeletedTables() {
+func (p *sessionRecord) resetDeletedTables() { //nolint:unused // pairs with delTable; recover now decodes each record afresh
 	p.hasRec &= ^(1 << recDelTable)
 	p.deletedTables = p.deletedTables[:0]
 }

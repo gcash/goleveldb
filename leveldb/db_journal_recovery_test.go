@@ -545,6 +545,85 @@ func TestJournalRecoveryBatchLengthOverflowSkipped(t *testing.T) {
 	}
 }
 
+// TestManifestCutRecordAppliesNothing ensures a MANIFEST record cut off at a
+// block boundary, as a flush commit whose Flush failed after its first block
+// reached the file leaves it, applies none of its fields. Recovery kept the
+// fields decoded before the cut: the record's journal number made it skip the
+// journal whose batches the record's table never got to hold, and the janitor
+// then removed that journal.
+func TestManifestCutRecordAppliesNothing(t *testing.T) {
+	fixture := newRecoveryFixture(frozenSeqFixture)
+	dir := writeRecoveryFixture(t, fixture)
+
+	// Rewrite the MANIFEST: the fixture's record, a filler that brings the
+	// next record's header to the end of the first block, and a flush commit
+	// for a newer journal whose first chunk holds only its journal number and
+	// the next field's tag, cut at the block boundary.
+	const (
+		blockSize  = 32 * 1024
+		headerSize = 7
+		firstChunk = 3
+	)
+	var buf bytes.Buffer
+	w := journal.NewWriter(&buf)
+	put := func(rec *sessionRecord) {
+		dst, err := w.Next()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rec.encode(dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	base := &sessionRecord{}
+	base.setComparer(fixtureComparator)
+	base.setJournalNum(fixtureJournalNum)
+	base.setNextFileNum(fixtureNextFileNum)
+	base.setSeqNum(frozenSeqFixture)
+	put(base)
+
+	at := int64(blockSize - headerSize - firstChunk)
+	filler := func(keyLen int) *sessionRecord {
+		rec := &sessionRecord{}
+		rec.addCompPtr(1, makeInternalKey(nil, bytes.Repeat([]byte{'x'}, keyLen-8), 0, keyTypeVal))
+		return rec
+	}
+	want := int(at - w.Size() - headerSize)
+	keyLen := want
+	for ; keyLen > 8; keyLen-- {
+		var b bytes.Buffer
+		if err := filler(keyLen).encode(&b); err != nil {
+			t.Fatal(err)
+		}
+		if b.Len() == want {
+			break
+		}
+	}
+	put(filler(keyLen))
+	if w.Size() != at {
+		t.Fatalf("layout: the cut record starts at %d, want %d", w.Size(), at)
+	}
+
+	cut := &sessionRecord{}
+	cut.setJournalNum(fixtureJournalNum + 10)
+	cut.setNextFileNum(fixtureNextFileNum + 20)
+	cut.setSeqNum(lastJournalSeq)
+	cut.addTable(0, fixtureNextFileNum+15, 1000,
+		makeInternalKey(nil, []byte("a"), 1, keyTypeVal), makeInternalKey(nil, []byte("z"), 1, keyTypeVal))
+	put(cut)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() <= blockSize {
+		t.Fatalf("layout: the cut record ends at %d, within the first block", buf.Len())
+	}
+	if err := os.WriteFile(filepath.Join(dir, fixture.manifestName()), buf.Bytes()[:blockSize], 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	assertFixtureKeys(t, recoveredFixtureKeys(t, dir, nil), wantFixtureKeys(firstJournalSeq))
+}
+
 // TestJournalRecoveryReadWriteOpenPreservesRecords covers what made the bug
 // destructive rather than merely wrong: the skipped records were not just
 // invisible, they were destroyed. recoverJournal ends by committing a manifest

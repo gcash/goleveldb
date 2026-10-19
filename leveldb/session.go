@@ -159,7 +159,7 @@ func (s *session) recover() (err error) {
 		strict = s.o.GetStrict(opt.StrictManifest)
 
 		jr      = journal.NewReader(reader, dropper{s, fd}, strict, true)
-		rec     = &sessionRecord{}
+		rec     = &sessionRecord{} // the fields the records have set so far
 		staging = s.stVersion.newStaging()
 
 		// The highest sequence recorded. A MANIFEST written before commits
@@ -177,27 +177,46 @@ func (s *session) recover() (err error) {
 			return errors.SetFd(err, fd)
 		}
 
-		err = rec.decode(r)
-		if err == nil {
-			// save compact pointers
-			for _, r := range rec.compPtrs {
-				s.setCompPtr(r.level, r.ikey)
-			}
-			// commit record to version staging
-			staging.commit(rec)
-			if rec.has(recSeqNum) && rec.seqNum > maxSeq {
-				maxSeq = rec.seqNum
-			}
-		} else {
+		// Decode each record on its own, and apply it only whole. The journal
+		// reader hands a record out as it reads it, so one cut short, by a
+		// commit that never finished or by corruption, has decoded fields by
+		// the time it fails: a journal number among them made recovery skip
+		// the journal whose batches the record's table never got to hold.
+		one := &sessionRecord{}
+		err = one.decode(r)
+		if err != nil {
 			err = errors.SetFd(err, fd)
 			if strict || !errors.IsCorrupted(err) {
 				return
 			}
-			s.logf("manifest error: %v (skipped)", errors.SetFd(err, fd))
+			s.logf("manifest error: %v (skipped)", err)
+			continue
 		}
-		rec.resetCompPtrs()
-		rec.resetAddedTables()
-		rec.resetDeletedTables()
+		// save compact pointers
+		for _, r := range one.compPtrs {
+			s.setCompPtr(r.level, r.ikey)
+		}
+		// commit record to version staging
+		staging.commit(one)
+		if one.has(recSeqNum) && one.seqNum > maxSeq {
+			maxSeq = one.seqNum
+		}
+		// A later record's fields override an earlier one's.
+		if one.has(recComparer) {
+			rec.setComparer(one.comparer)
+		}
+		if one.has(recJournalNum) {
+			rec.setJournalNum(one.journalNum)
+		}
+		if one.has(recPrevJournalNum) {
+			rec.setPrevJournalNum(one.prevJournalNum)
+		}
+		if one.has(recNextFileNum) {
+			rec.setNextFileNum(one.nextFileNum)
+		}
+		if one.has(recSeqNum) {
+			rec.setSeqNum(one.seqNum)
+		}
 	}
 
 	switch {
