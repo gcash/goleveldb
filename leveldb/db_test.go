@@ -2460,6 +2460,22 @@ func TestDB_WriteLandsWhenRotationAfterItFails(t *testing.T) {
 	h.getVal("a", "1")
 }
 
+// TestDB_NewRawIteratorAfterClose ensures an iterator built once Close has
+// run, as NewIterator racing Close can, after its own check, reports
+// ErrClosed. Building it used the memdb that Close had cleared, and panicked.
+func TestDB_NewRawIteratorAfterClose(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+	h.put("a", "1")
+	h.closeDB()
+
+	iter := h.db.newRawIterator(nil, nil, nil, nil)
+	defer iter.Release()
+	if iter.Next() || iter.Error() != ErrClosed {
+		t.Errorf("raw iterator after Close: error %v, want %v", iter.Error(), ErrClosed)
+	}
+}
+
 // TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers
 // would pass what an internal key holds fails before it reaches the journal.
 // Recovery moves the sequence one past the last batch and rejects a batch

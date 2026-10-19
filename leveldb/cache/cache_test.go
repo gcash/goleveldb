@@ -589,6 +589,35 @@ func TestCacheEnumerateNodesOnce(t *testing.T) {
 	}
 }
 
+// TestNodeFinalizerRunsOnce ensures a node's value is released, and its delete
+// funcs run, once when Close(true) and the release of its last handle both
+// finalize it at the same time. They raced on the node's fields, and could
+// run a table's removal callback twice, which hands its file number out
+// twice. The race detector catches the old code.
+func TestNodeFinalizerRunsOnce(t *testing.T) {
+	c := NewCache(nil)
+	var released, deleted int32
+	h := set(c, 0, 1, 1, 1, func() { atomic.AddInt32(&released, 1) })
+	if !c.Delete(0, 1, func() { atomic.AddInt32(&deleted, 1) }) {
+		t.Fatal("Delete: node not found")
+	}
+	n := (*Node)(h.n)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n.callFinalizer()
+		}()
+	}
+	wg.Wait()
+	h.Release() // the last reference: deleting the node finalizes it too
+	if released != 1 || deleted != 1 {
+		t.Errorf("value released %d times and delete funcs run %d times, want once each", released, deleted)
+	}
+	c.Close(false)
+}
+
 // TestCacheCloseDuringGetThatEvicts ensures Close returns while a Get is under
 // way whose Promote evicts a node and releases its last reference. That
 // release took the read lock again while Close waited for the write lock, so

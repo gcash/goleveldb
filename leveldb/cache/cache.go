@@ -204,19 +204,16 @@ func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done,
 		return true, false
 	}
 	n := b.nodes[i]
-	var bLen int
+	var (
+		bLen     int
+		delFuncs []func()
+	)
 	if n.ns == ns && n.key == key {
 		if atomic.LoadInt32(&n.ref) == 0 {
 			deleted = true
 
-			// Save and clear value.
-			if n.value != nil {
-				// Call releaser.
-				if r, ok := n.value.(util.Releaser); ok {
-					r.Release()
-				}
-				n.value = nil
-			}
+			// Release the value before the key can be added again.
+			delFuncs = n.finalize()
 
 			// Remove node from bucket.
 			b.nodes = append(b.nodes[:i], b.nodes[i+1:]...)
@@ -227,7 +224,7 @@ func (b *mBucket) delete(r *Cache, h *mHead, hash uint32, ns, key uint64) (done,
 
 	if deleted {
 		// Call delete funcs.
-		for _, f := range n.delFuncs {
+		for _, f := range delFuncs {
 			f()
 		}
 
@@ -732,9 +729,10 @@ type Node struct {
 	hash    uint32
 	ns, key uint64
 
-	mu    sync.Mutex
-	size  int
-	value Value
+	mu        sync.Mutex
+	size      int
+	value     Value
+	finalized bool // under mu
 
 	ref      int32
 	delFuncs []func()
@@ -775,20 +773,34 @@ func (n *Node) GetHandle() *Handle {
 	return &Handle{unsafe.Pointer(n)}
 }
 
-func (n *Node) callFinalizer() {
-	// Call releaser.
-	if n.value != nil {
-		if r, ok := n.value.(util.Releaser); ok {
-			r.Release()
-		}
-		n.value = nil
+// finalize releases the node's value and returns its delete funcs for the
+// caller to call, once however often it is called: Close(true) and the
+// release of the node's last handle can finalize it at the same time. It
+// leaves the value in place, since a handle held across Close(true) may still
+// read it, without a lock; a released value reports its own error.
+func (n *Node) finalize() []func() {
+	n.mu.Lock()
+	if n.finalized {
+		n.mu.Unlock()
+		return nil
 	}
+	n.finalized = true
+	value, delFuncs := n.value, n.delFuncs
+	n.delFuncs = nil
+	n.mu.Unlock()
 
-	// Call delete funcs.
-	for _, f := range n.delFuncs {
+	// Call releaser.
+	if r, ok := value.(util.Releaser); ok {
+		r.Release()
+	}
+	return delFuncs
+}
+
+// callFinalizer finalizes the node and calls its delete funcs.
+func (n *Node) callFinalizer() {
+	for _, f := range n.finalize() {
 		f()
 	}
-	n.delFuncs = nil
 }
 
 func (n *Node) unRefInternal(updateStat bool) {

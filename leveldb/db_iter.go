@@ -31,6 +31,16 @@ func (mr *memdbReleaser) Release() {
 func (db *DB) newRawIterator(auxm *memDB, auxt tFiles, slice *util.Range, ro *opt.ReadOptions) iterator.Iterator {
 	strict := opt.GetStrict(db.s.o.Options, ro, opt.StrictReader)
 	em, fm := db.getMems()
+	if em == nil {
+		// Close has run since the caller checked, and cleared the memdbs.
+		if fm != nil {
+			fm.decref()
+		}
+		if auxm != nil {
+			auxm.decref()
+		}
+		return iterator.NewEmptyIterator(ErrClosed)
+	}
 	v := db.s.version()
 
 	tableIts := v.getIterators(slice, ro)
