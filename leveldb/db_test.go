@@ -3114,6 +3114,26 @@ func TestDB_WriteFailsPastMaxSequence(t *testing.T) {
 	}
 }
 
+// TestDB_CompactionKeepsNewestAtMaxSequence ensures a compaction keeps the
+// newest entry of every key once the sequence is keyMaxSeq, where recovery
+// leaves it after replaying a batch that took the last usable number: it sets
+// the sequence one past the batch. A compaction keeps a key's newest entry by
+// comparing keyMaxSeq with the smallest sequence a snapshot can see, and
+// dropped it once the two were equal.
+func TestDB_CompactionKeepsNewestAtMaxSequence(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.db.setSeq(keyMaxSeq - 2)
+	h.put("a", "1") // takes keyMaxSeq-1, the last usable number
+	h.reopenDB()    // replays it from the journal
+	if got := h.db.getSeq(); got != keyMaxSeq {
+		t.Fatalf("sequence after the reopen = %d, want %d", got, keyMaxSeq)
+	}
+	h.compactRange("", "")
+	h.getVal("a", "1")
+}
+
 // TestDB_TransactionWriteFailsWholePastMaxSequence ensures a transaction's
 // Write of a batch whose sequence numbers would pass the last usable one fails
 // whole, as a DB write does, and that a transaction put cannot wrap the check

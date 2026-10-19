@@ -606,7 +606,14 @@ func (db *DB) tableCompaction(c *compaction, noTrivial bool) {
 		}
 	}
 	sourceSize := stats[0].read + stats[1].read
+	// The builder keeps each key's newest entry by comparing keyMaxSeq with
+	// minSeq, so minSeq must stay below it. Recovery leaves the sequence one
+	// past the last batch, which after one that took the last usable number
+	// is keyMaxSeq itself.
 	minSeq := db.minSeq()
+	if minSeq >= keyMaxSeq {
+		minSeq = keyMaxSeq - 1
+	}
 	db.logf("table@compaction L%d·%d -> L%d·%d S·%s Q·%d", c.sourceLevel, len(c.levels[0]), c.sourceLevel+1, len(c.levels[1]), shortenb(sourceSize), minSeq)
 
 	b := &tableCompactionBuilder{
