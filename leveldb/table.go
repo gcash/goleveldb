@@ -359,7 +359,7 @@ type tOps struct {
 }
 
 // Creates an empty table and returns table writer.
-func (t *tOps) create(tSize int) (*tWriter, error) {
+func (t *tOps) create() (*tWriter, error) {
 	fd := storage.FileDesc{Type: storage.TypeTable, Num: t.s.allocFileNum()}
 	fw, err := t.s.stor.Create(fd)
 	if err != nil {
@@ -369,13 +369,15 @@ func (t *tOps) create(tSize int) (*tWriter, error) {
 		t:  t,
 		fd: fd,
 		w:  fw,
-		tw: table.NewWriter(fw, t.s.o.Options, t.blockBuffer, tSize),
+		// The writer's buffer holds one data block at a time, so size it
+		// for a block rather than for the whole table.
+		tw: table.NewWriter(fw, t.s.o.Options, t.blockBuffer, 2*t.s.o.GetBlockSize()),
 	}, nil
 }
 
 // Builds table from src iterator.
 func (t *tOps) createFrom(src iterator.Iterator) (f *tFile, n int, err error) {
-	w, err := t.create(0)
+	w, err := t.create()
 	if err != nil {
 		return
 	}
