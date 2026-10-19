@@ -1884,6 +1884,9 @@ func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
 			for _, t := range tr.tables {
 				trTables = append(trTables, t.fd)
 			}
+			if len(trTables) == 0 {
+				t.Fatal("the transaction made no tables, so the table checks would prove nothing")
+			}
 			// Listed rather than opened: the DB may hold a table open, and
 			// the test storage refuses to open a file twice.
 			exists := func(fd storage.FileDesc) bool {

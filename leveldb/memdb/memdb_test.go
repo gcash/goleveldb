@@ -226,6 +226,13 @@ func TestFindGE(t *testing.T) {
 	if want := len(keys) - len(tall); p.Len() != want {
 		t.Fatalf("%d entries after deleting the tall nodes, want %d", p.Len(), want)
 	}
+
+	// Deleting relinks nodes on every level, which Len does not see. findGE
+	// must still agree with a walk of the links, for every key.
+	check(nil)
+	for _, key := range keys {
+		check(key)
+	}
 }
 
 // TestPutOverwrite ensures putting a key that is already in the DB replaces

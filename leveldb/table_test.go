@@ -26,6 +26,8 @@ func TestGetOverlaps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.release()
+	defer s.close()
 
 	v := newVersion(s)
 	v.newStaging()
@@ -115,6 +117,8 @@ func TestNewIndexIteratorInvertedRange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer s.release()
+	defer s.close()
 
 	ik := func(ukey string) internalKey {
 		return makeInternalKey(nil, []byte(ukey), keyMaxSeq, keyTypeSeek)

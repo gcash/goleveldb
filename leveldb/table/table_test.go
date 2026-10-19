@@ -156,6 +156,9 @@ func TestWriterCloseTwice(t *testing.T) {
 
 // TestReaderUnknownCompressionType ensures a block with an unknown compression
 // type reads as corrupted, naming the type, when its buffer comes from a pool.
+// It covers that error path only. The fixed bug read the type after putting
+// the buffer back in the pool, which a single goroutine cannot catch: nothing
+// takes the buffer out again in between.
 func TestReaderUnknownCompressionType(t *testing.T) {
 	var buf bytes.Buffer
 	o := &opt.Options{Compression: opt.NoCompression}
