@@ -15,16 +15,18 @@ import (
 	"github.com/gcash/goleveldb/leveldb/util"
 )
 
+// writeJournal writes batches to the journal. A failed write or sync can
+// leave a torn record at the journal's end, so its error stops writes.
 func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 	wr, err := db.journal.Next()
 	if err != nil {
-		return err
+		return &writesStoppedError{"journal write", err}
 	}
 	if err := writeBatchesWithHeader(wr, batches, seq); err != nil {
-		return err
+		return &writesStoppedError{"journal write", err}
 	}
 	if err := db.journal.Flush(); err != nil {
-		return err
+		return &writesStoppedError{"journal write", err}
 	}
 	if sync {
 		if err := db.journalWriter.Sync(); err != nil {
@@ -248,8 +250,8 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 		// The batches may have reached the journal in part or in full, so
 		// skip their sequence numbers: no later batch may reuse them.
 		db.addSeq(uint64(batchesLen(batches)))
-		// After a failed sync the journal's state is unknown, so stop all
-		// writes until the DB is reopened.
+		// After a failed write or sync the journal's state is unknown, so
+		// stop all writes until the DB is reopened.
 		if isWritesStopped(err) {
 			err = db.stopWrites(err)
 		}
@@ -287,6 +289,9 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 //
 // It is safe to modify the contents of the arguments after Write returns but
 // not before. Write will not modify content of the batch.
+//
+// Once writes have stopped, Write returns an error matching ErrWritesStopped
+// until the DB is reopened. So do Put and Delete.
 func (db *DB) Write(batch *Batch, wo *opt.WriteOptions) error {
 	if err := db.ok(); err != nil || batch == nil || batch.Len() == 0 {
 		return err
@@ -429,6 +434,9 @@ func isMemOverlaps(icmp *iComparer, mem *memdb.DB, min, max []byte) bool {
 // A nil Range.Start is treated as a key before all keys in the DB.
 // And a nil Range.Limit is treated as a key after all keys in the DB.
 // Therefore if both is nil then it will compact entire DB.
+//
+// Compactions stop along with writes, so once writes have stopped,
+// CompactRange returns an error matching ErrWritesStopped.
 func (db *DB) CompactRange(r util.Range) error {
 	if err := db.ok(); err != nil {
 		return err

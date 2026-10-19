@@ -17,6 +17,13 @@ var (
 	ErrSnapshotReleased = errors.New("leveldb: snapshot released")
 	ErrIterReleased     = errors.New("leveldb: iterator released")
 	ErrClosed           = errors.New("leveldb: closed")
+
+	// ErrWritesStopped is matched, through errors.Is, by the error every write,
+	// transaction and compaction returns once a journal write or sync, or a
+	// MANIFEST commit, has failed. What reached the disk is then unknown, so
+	// the DB takes no more writes until it is reopened, as LevelDB does.
+	// Reads keep working.
+	ErrWritesStopped = errors.New("leveldb: writes stopped until reopened")
 )
 
 // errSeqExhausted is returned by a write that would pass the largest
@@ -36,6 +43,9 @@ func (e *writesStoppedError) Error() string {
 }
 
 func (e *writesStoppedError) Unwrap() error { return e.err }
+
+// Is reports whether target is ErrWritesStopped, for errors.Is.
+func (e *writesStoppedError) Is(target error) bool { return target == ErrWritesStopped }
 
 func isWritesStopped(err error) bool {
 	_, ok := err.(*writesStoppedError)

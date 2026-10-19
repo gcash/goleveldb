@@ -148,6 +148,9 @@ func (tr *Transaction) Put(key, value []byte, wo *opt.WriteOptions) error {
 	if tr.closed {
 		return errTransactionDone
 	}
+	if err := tr.db.writesStopped(); err != nil {
+		return err
+	}
 	return tr.put(keyTypeVal, key, value)
 }
 
@@ -161,6 +164,9 @@ func (tr *Transaction) Delete(key []byte, wo *opt.WriteOptions) error {
 	defer tr.lk.Unlock()
 	if tr.closed {
 		return errTransactionDone
+	}
+	if err := tr.db.writesStopped(); err != nil {
+		return err
 	}
 	return tr.put(keyTypeDel, key, nil)
 }
@@ -181,6 +187,9 @@ func (tr *Transaction) Write(b *Batch, wo *opt.WriteOptions) error {
 	if tr.closed {
 		return errTransactionDone
 	}
+	if err := tr.db.writesStopped(); err != nil {
+		return err
+	}
 	return b.replayInternal(func(i int, kt keyType, k, v []byte) error {
 		return tr.put(kt, k, v)
 	})
@@ -194,9 +203,11 @@ func (tr *Transaction) setDone() {
 }
 
 // Commit commits the transaction. If error is not nil, then the transaction is
-// not committed, it can then either be retried or discarded. After a failed
-// MANIFEST commit it can only be discarded, and writes stay stopped until the
-// DB is reopened.
+// not committed, it can then either be retried or discarded, unless the error
+// matches ErrWritesStopped. Then writes have stopped until the DB is reopened,
+// and the transaction can only be discarded. If its own MANIFEST commit
+// failed, its record may have reached the disk anyway: the next open decides
+// whether it is committed, and Discard cannot undo it.
 //
 // Other methods should not be called after transaction has been committed.
 func (tr *Transaction) Commit() error {
@@ -280,6 +291,9 @@ func (tr *Transaction) discard() {
 // This method is noop if transaction is already closed (either committed or
 // discarded)
 //
+// After Commit fails with an error matching ErrWritesStopped, Discard only
+// releases the transaction; see Commit.
+//
 // Other methods should not be called after transaction has been discarded.
 func (tr *Transaction) Discard() {
 	tr.lk.Lock()
@@ -310,6 +324,10 @@ func (db *DB) waitCompaction() error {
 // The transaction must be closed once done, either by committing or discarding
 // the transaction.
 // Closing the DB will discard open transaction.
+//
+// Once writes have stopped, OpenTransaction returns an error matching
+// ErrWritesStopped until the DB is reopened, and so do the Put, Delete,
+// Write and Commit methods of a transaction already open.
 func (db *DB) OpenTransaction() (*Transaction, error) {
 	if err := db.ok(); err != nil {
 		return nil, err

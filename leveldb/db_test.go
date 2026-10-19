@@ -11,6 +11,7 @@ import (
 	"container/list"
 	crand "crypto/rand"
 	"encoding/binary"
+	stderrors "errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -1598,7 +1599,9 @@ func TestDB_JournalSyncErrorStopsWrites(t *testing.T) {
 }
 
 // TestDB_JournalWriteErrorSkipsSequence ensures a write whose journal write
-// fails moves the sequence past it, so no later write reuses its numbers.
+// fails moves the sequence past it, so no later write reuses its numbers, and
+// stops later writes until the DB is reopened, as a failed sync does: either
+// way the journal may end in a torn record.
 func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	h := newDbHarness(t)
 	defer h.close()
@@ -1613,6 +1616,51 @@ func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
 	h.stor.EmulateError(testutil.ModeWrite, storage.TypeJournal, nil)
 	if got := h.db.getSeq(); got != seq+1 {
 		t.Errorf("sequence %d after the failed write, want %d", got, seq+1)
+	}
+	if err := h.db.Put([]byte("c"), []byte("3"), nil); !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("put after a failed journal write = %v, want an ErrWritesStopped match", err)
+	}
+
+	h.reopenDB()
+	h.getVal("a", "1")
+	h.put("c", "3")
+}
+
+// TestDB_WritesStoppedMatchesSentinel ensures every call that refuses work
+// once writes have stopped returns an error matching ErrWritesStopped, so
+// callers can tell a stop that lasts until reopen from a passing failure.
+func TestDB_WritesStoppedMatchesSentinel(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, errors.New("journal sync error"))
+	err := h.db.Put([]byte("a"), []byte("1"), &opt.WriteOptions{Sync: true})
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, nil)
+	if !stderrors.Is(err, ErrWritesStopped) {
+		t.Errorf("put with a failing journal sync = %v, want an ErrWritesStopped match", err)
+	}
+
+	batch := new(Batch)
+	batch.Put([]byte("b"), []byte("2"))
+	for _, c := range []struct {
+		name string
+		call func() error
+	}{
+		{"Put", func() error { return h.db.Put([]byte("b"), []byte("2"), nil) }},
+		{"Delete", func() error { return h.db.Delete([]byte("b"), nil) }},
+		{"Write", func() error { return h.db.Write(batch, nil) }},
+		{"OpenTransaction", func() error {
+			tr, err := h.db.OpenTransaction()
+			if err == nil {
+				tr.Discard()
+			}
+			return err
+		}},
+		{"CompactRange", func() error { return h.db.CompactRange(util.Range{}) }},
+	} {
+		if err := c.call(); !stderrors.Is(err, ErrWritesStopped) {
+			t.Errorf("%s after writes stopped = %v, want an ErrWritesStopped match", c.name, err)
+		}
 	}
 }
 
@@ -1703,8 +1751,8 @@ func TestDB_LargeWriteCommitErrorReleasesWriteLock(t *testing.T) {
 			// for good.
 			err := h.db.Put([]byte("a"), []byte("1"), nil)
 			if test.stopped {
-				if _, ok := err.(*writesStoppedError); !ok {
-					t.Errorf("put after a failed MANIFEST commit = %v, want writes stopped", err)
+				if !stderrors.Is(err, ErrWritesStopped) {
+					t.Errorf("put after a failed MANIFEST commit = %v, want an ErrWritesStopped match", err)
 				}
 			} else if err != nil {
 				t.Error("put after a failed table flush: got error: ", err)
@@ -1796,6 +1844,9 @@ func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
 			}
 			if got := h.db.getSeq(); got != tr.seq {
 				t.Errorf("sequence %d after the failed commit, want %d", got, tr.seq)
+			}
+			if err := tr.Put([]byte("d"), []byte("4"), nil); !stderrors.Is(err, ErrWritesStopped) {
+				t.Errorf("transaction put after its failed commit = %v, want an ErrWritesStopped match", err)
 			}
 			var trTables []storage.FileDesc
 			for _, t := range tr.tables {
