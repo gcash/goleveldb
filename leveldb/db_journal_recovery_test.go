@@ -495,6 +495,56 @@ func TestJournalRecoveryMalformedBatchNotHalfApplied(t *testing.T) {
 	}
 }
 
+// TestJournalRecoveryBatchLengthOverflowSkipped ensures recovery treats a
+// batch whose key length overflows an int as corrupt: it is skipped, or fails
+// the open under StrictJournal. The length passed the decoder's check as a
+// negative int and recovery panicked, so neither Open nor Recover could open
+// the DB.
+func TestJournalRecoveryBatchLengthOverflowSkipped(t *testing.T) {
+	corrupted := func(t *testing.T) string {
+		fixture := newRecoveryFixture(frozenSeqFixture)
+		fixture.batches = fixtureSeqBatches(firstJournalSeq, 15)
+		dir := writeRecoveryFixture(t, fixture)
+
+		// Rewrite the journal with a last batch at 16 holding a delete whose
+		// key length is 2^63. Its checksum is valid, so only decoding finds
+		// the fault.
+		var records [][]byte
+		for _, b := range fixture.batches {
+			rec, err := fixtureEncodeBatch(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			records = append(records, rec)
+		}
+		bad := append(encodeBatchHeader(nil, 16, 1), 0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01)
+		records = append(records, bad)
+		if err := fixtureWriteJournalFile(filepath.Join(dir, fixture.journalName()), records); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+
+	db, err := OpenFile(corrupted(t), &opt.Options{Strict: opt.StrictJournal})
+	if err == nil {
+		db.Close()
+		t.Error("open under StrictJournal: expected a corruption error")
+	} else if !errors.IsCorrupted(err) {
+		t.Errorf("open under StrictJournal = %v, want a corruption error", err)
+	}
+
+	db, err = OpenFile(corrupted(t), nil)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	for seq := uint64(firstJournalSeq); seq <= 15; seq++ {
+		if _, err := db.Get([]byte(fixtureSeqKey(seq)), nil); err != nil {
+			t.Errorf("get %s: %v", fixtureSeqKey(seq), err)
+		}
+	}
+}
+
 // TestJournalRecoveryReadWriteOpenPreservesRecords covers what made the bug
 // destructive rather than merely wrong: the skipped records were not just
 // invisible, they were destroyed. recoverJournal ends by committing a manifest

@@ -283,10 +283,11 @@ func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
 		}
 		o++
 
-		// Key.
+		// Key. Compare the length unconverted: as an int, a length of 2^63
+		// or more is negative and would pass, moving o backwards.
 		x, n := binary.Uvarint(data[o:])
 		o += n
-		if n <= 0 || o+int(x) > len(data) {
+		if n <= 0 || x > uint64(len(data)-o) {
 			return newErrBatchCorrupted("bad record: invalid key length")
 		}
 		index.keyPos = o
@@ -297,7 +298,7 @@ func decodeBatch(data []byte, fn func(i int, index batchIndex) error) error {
 		if index.keyType == keyTypeVal {
 			x, n = binary.Uvarint(data[o:])
 			o += n
-			if n <= 0 || o+int(x) > len(data) {
+			if n <= 0 || x > uint64(len(data)-o) {
 				return newErrBatchCorrupted("bad record: invalid value length")
 			}
 			index.valuePos = o

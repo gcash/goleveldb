@@ -217,3 +217,33 @@ func TestDecodeBatchToMemRejectsSequencePastInternalKey(t *testing.T) {
 		}
 	}
 }
+
+// TestBatchLoadRejectsLengthOverflow ensures Load rejects, as corrupt, a
+// record whose key or value length does not fit in what is left of the batch,
+// however large. The length check converted the length to an int first, so a
+// length of 2^63 or more turned negative, passed it, and moved the decoder
+// backwards: decoding then panicked, accepted the batch, or looped until
+// memory ran out.
+func TestBatchLoadRejectsLengthOverflow(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data []byte
+	}{
+		// A delete whose key length is 2^63; decoding panicked.
+		{"key", []byte{0x00, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}},
+		// A key length of 2^64-1, -1 as an int, re-read the length's last
+		// byte as a second record, and the batch was accepted.
+		{"key_minus_1", []byte{0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01, 0x00, 0x00}},
+		// A key length of 2^64-11, -11 as an int, went back to the record's
+		// start, so decoding looped.
+		{"key_minus_11", []byte{0x00, 0xf5, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01}},
+		// A put of "k" whose value length is 2^63; decoding panicked.
+		{"value", []byte{0x01, 0x01, 'k', 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := new(Batch).Load(test.data); !errors.IsCorrupted(err) {
+				t.Errorf("Load = %v, want a corruption error", err)
+			}
+		})
+	}
+}
