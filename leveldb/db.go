@@ -484,6 +484,18 @@ func recoverTable(s *session, o *opt.Options) error {
 	// Set sequence number.
 	rec.setSeqNum(maxSeq)
 
+	// Number the new MANIFEST above every file present, as RepairDB does: a
+	// failed SetMeta can leave a pending CURRENT.<n> naming a MANIFEST above
+	// the tables, which the next open would prefer to a lower one written
+	// here.
+	mfds, err := s.stor.List(storage.TypeManifest | storage.TypeJournal)
+	if err != nil {
+		return err
+	}
+	for _, fd := range mfds {
+		s.markFileNum(fd.Num)
+	}
+
 	// Write the recovered tables in the new MANIFEST's first record, as
 	// LevelDB's RepairDB does. CURRENT names the MANIFEST as soon as that
 	// record is written, so tables in a later record that never reached the

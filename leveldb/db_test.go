@@ -2352,6 +2352,77 @@ func TestRecoverManifestListsTablesFirst(t *testing.T) {
 	}
 }
 
+// TestRecoverManifestOutnumbersPendingCurrent ensures the MANIFEST Recover
+// writes is numbered above every file present, so a pending CURRENT.<n> left
+// by a failed SetMeta cannot take precedence at the next open. Recover
+// numbered its MANIFEST above the tables only, and the next open preferred a
+// leftover CURRENT.<n> naming a higher MANIFEST from before the Recover: it
+// then deleted every table written since, or failed on those a compaction
+// had replaced.
+func TestRecoverManifestOutnumbersPendingCurrent(t *testing.T) {
+	dir := t.TempDir()
+	db, err := OpenFile(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("a"), []byte("1"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompactRange(util.Range{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Leave what a failed rename in SetMeta leaves: a complete MANIFEST
+	// numbered above the tables, and a pending CURRENT.100 naming it.
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := os.ReadFile(filepath.Join(dir, strings.TrimSpace(string(current))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "MANIFEST-000100"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(dir, "CURRENT.100")
+	if err := os.WriteFile(pending, []byte("MANIFEST-000100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recover, write, and compact, which replaces the table holding "a".
+	db, err = RecoverFile(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put([]byte("b"), []byte("2"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompactRange(util.Range{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = OpenFile(dir, nil)
+	if err != nil {
+		t.Fatalf("open after Recover: %v", err)
+	}
+	defer db.Close()
+	for _, kv := range [][2]string{{"a", "1"}, {"b", "2"}} {
+		if v, err := db.Get([]byte(kv[0]), nil); err != nil || string(v) != kv[1] {
+			t.Errorf("get %s after Recover = %q, %v; want %s", kv[0], v, err, kv[1])
+		}
+	}
+	if _, err := os.Stat(pending); !os.IsNotExist(err) {
+		t.Errorf("CURRENT.100 after the open: %v, want it removed", err)
+	}
+}
+
 // TestDB_LeftoverJournalRemovedAfterFlush ensures a journal that outlives its
 // flush, because removing it failed, is removed after a later flush. Recover
 // replays every journal present, so a leftover journal brought back a key
