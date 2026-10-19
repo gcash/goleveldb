@@ -91,11 +91,14 @@ func (db *DB) checkAndCleanFiles() error {
 		return errors.NewErrCorrupted(storage.FileDesc{}, &errors.ErrMissingFiles{Fds: mfds})
 	}
 
+	// The files are obsolete, so a failed removal is only logged, as LevelDB
+	// does. The next open retries it, and so do Close and, for journals,
+	// every flush.
 	db.logf("db@janitor F·%d G·%d", len(fds), len(rem))
 	for _, fd := range rem {
 		db.logf("db@janitor removing %s-%d", fd.Type, fd.Num)
 		if err := db.s.stor.Remove(fd); err != nil {
-			return err
+			db.logf("db@janitor removing %s-%d %q", fd.Type, fd.Num, err)
 		}
 	}
 	return nil

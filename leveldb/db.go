@@ -578,9 +578,11 @@ func (db *DB) recoverJournal() error {
 				}
 				rec.resetAddedTables()
 
+				// The commit moved recovery past the journal, so a failed
+				// removal is only logged: the janitor below retries it, and
+				// so do the flushes after the open.
 				if err := db.s.stor.Remove(ofd); err != nil {
-					fr.Close()
-					return err
+					db.logf("journal@remove removing @%d %q", ofd.Num, err)
 				}
 				ofd = storage.FileDesc{}
 			}
@@ -687,10 +689,11 @@ func (db *DB) recoverJournal() error {
 		return err
 	}
 
-	// Remove the last obsolete journal file.
+	// Remove the last obsolete journal file. As above, a failed removal is
+	// only logged.
 	if !ofd.Zero() {
 		if err := db.s.stor.Remove(ofd); err != nil {
-			return err
+			db.logf("journal@remove removing @%d %q", ofd.Num, err)
 		}
 	}
 

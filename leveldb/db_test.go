@@ -2384,6 +2384,83 @@ func TestDB_LeftoverJournalRemovedAfterFlush(t *testing.T) {
 	h.get("k", false)
 }
 
+// TestDB_ManifestRemoveErrorKeepsWrites ensures failing to remove a MANIFEST
+// a newer one replaced stops neither writes nor an open, as in LevelDB: CURRENT
+// already names the new MANIFEST, and a later open removes the old one. The
+// error used to fail the commit, which stopped writes until the DB was
+// reopened, and the open whose first commit replaces the MANIFEST.
+func TestDB_ManifestRemoveErrorKeepsWrites(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{MaxManifestFileSize: 1})
+	defer h.close()
+
+	manifests := func() []storage.FileDesc {
+		fds, err := h.stor.List(storage.TypeManifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fds
+	}
+
+	// Every flush commits, and past the 1 byte limit the MANIFEST is rebuilt
+	// once it has doubled, so a few flushes replace it.
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeManifest, errors.New("manifest remove error"))
+	for i := 0; len(manifests()) < 2; i++ {
+		if i == 20 {
+			t.Fatal("the MANIFEST was never replaced")
+		}
+		h.put(fmt.Sprintf("k%d", i), "v")
+		h.compactMem()
+	}
+	h.put("after", "v")
+	h.compactRange("", "")
+
+	// An open's first commit replaces the MANIFEST it recovered from.
+	h.reopenDB()
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeManifest, nil)
+	h.reopenDB()
+	if fds := manifests(); len(fds) != 1 {
+		t.Errorf("MANIFESTs after a reopen: %v, want only the current one", fds)
+	}
+	h.getVal("k0", "v")
+	h.getVal("after", "v")
+}
+
+// TestDB_JournalRemoveErrorAtOpen ensures failing to remove the journals an
+// open has replayed and flushed does not fail the open, and that a later flush
+// removes them. The error used to fail the open, and after the last journal it
+// also left the new journal open.
+func TestDB_JournalRemoveErrorAtOpen(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB})
+	defer h.close()
+
+	// Leave two journals behind: a Put larger than the write buffer rotates
+	// the memdb right after it, and the flush of the frozen memdb fails.
+	big := bytes.Repeat([]byte{'x'}, 128*opt.KiB)
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, errors.New("table write error"))
+	if err := h.db.Put([]byte("big"), big, nil); err != nil {
+		t.Fatal("Put: got error: ", err)
+	}
+	h.put("small", "v")
+	h.db.Close()
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, nil)
+
+	// The open replays and flushes both journals, then fails to remove them.
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeJournal, errors.New("journal remove error"))
+	h.openDB()
+	h.getVal("big", string(big))
+	h.getVal("small", "v")
+
+	h.stor.EmulateError(testutil.ModeRemove, storage.TypeJournal, nil)
+	h.compactMem()
+	journals, err := h.stor.List(storage.TypeJournal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(journals) != 1 {
+		t.Errorf("journals after a flush: %v, want only the current one", journals)
+	}
+}
+
 // TestDB_CloseRemovesObsoleteTables ensures Close removes the tables that
 // compactions replaced, which the session may not have got to yet, as the
 // next open would. Recover reads every table present, so a replaced table left

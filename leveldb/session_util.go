@@ -430,8 +430,13 @@ func (s *session) newManifest(rec *sessionRecord, v *version) (err error) {
 			if s.manifestWriter != nil {
 				s.manifestWriter.Close()
 			}
+			// CURRENT names the new MANIFEST by now, so a failed removal of
+			// the old one is only logged, as LevelDB does; the next open's
+			// janitor removes it.
 			if !s.manifestFd.Zero() {
-				err = s.stor.Remove(s.manifestFd)
+				if rerr := s.stor.Remove(s.manifestFd); rerr != nil {
+					s.logf("manifest@remove removing @%d %q", s.manifestFd.Num, rerr)
+				}
 			}
 			s.manifestFd = fd
 			s.manifestWriter = writer
