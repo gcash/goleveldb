@@ -310,6 +310,10 @@ func (w *Writer) Close() error {
 			// in buf.Bytes() returning the whole allocated bytes.
 			w.dataBlock.buf.Reset()
 			w.bpool.Put(w.dataBlock.buf.Bytes())
+			// The buffer belongs to the pool now: put it back once, even
+			// if Close is called again, and stop referencing it.
+			w.bpool = nil
+			w.dataBlock.buf = util.Buffer{}
 		}
 	}()
 

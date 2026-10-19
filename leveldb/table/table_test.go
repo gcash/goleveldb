@@ -8,6 +8,8 @@ package table
 
 import (
 	"bytes"
+	"strings"
+	"testing"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -129,3 +131,23 @@ var _ = testutil.Defer(func() {
 		})
 	})
 })
+
+// TestWriterCloseTwice ensures closing a table writer twice returns its buffer
+// to the pool once, so no two later users of the pool can share it.
+func TestWriterCloseTwice(t *testing.T) {
+	pool := util.NewBufferPool(opt.DefaultBlockSize + 5)
+	w := NewWriter(new(bytes.Buffer), &opt.Options{}, pool, 2*opt.DefaultBlockSize)
+	if err := w.Append([]byte("k"), []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A second Close reports that the writer is closed.
+	if err := w.Close(); err == nil {
+		t.Error("second close: expected error")
+	}
+	if s := pool.String(); !strings.Contains(s, " P·1 ") {
+		t.Errorf("buffer returned to the pool more than once: %s", s)
+	}
+}
