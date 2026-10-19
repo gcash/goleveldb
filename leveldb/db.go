@@ -68,6 +68,7 @@ type DB struct {
 	writeMergedC chan bool
 	writeLockC   chan struct{}
 	writeAckC    chan error
+	writeErr     error // stops every later write; set and read under the write lock
 	writeDelay   time.Duration
 	writeDelayN  int
 	tr           *Transaction

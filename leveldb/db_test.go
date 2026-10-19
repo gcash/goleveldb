@@ -1555,6 +1555,59 @@ func TestDB_TransactionManifestWriteError(t *testing.T) {
 	h.getVal("foo", "bar")
 }
 
+// TestDB_JournalSyncErrorStopsWrites ensures a write whose journal sync fails
+// moves the sequence past it and stops every later write until the DB is
+// reopened, as LevelDB does, rather than letting the next write reuse its
+// sequence numbers.
+func TestDB_JournalSyncErrorStopsWrites(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("a", "1")
+	seq := h.db.getSeq()
+
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, errors.New("journal sync error"))
+	if err := h.db.Put([]byte("b"), []byte("2"), &opt.WriteOptions{Sync: true}); err == nil {
+		t.Fatal("put with a failing journal sync: expected error")
+	}
+	if got := h.db.getSeq(); got != seq+1 {
+		t.Errorf("sequence %d after the failed write, want %d", got, seq+1)
+	}
+	h.stor.EmulateError(testutil.ModeSync, storage.TypeJournal, nil)
+
+	if err := h.db.Put([]byte("c"), []byte("3"), nil); err == nil {
+		t.Error("put after a failed journal sync: expected error")
+	}
+	if tr, err := h.db.OpenTransaction(); err == nil {
+		tr.Discard()
+		t.Error("transaction after a failed journal sync: expected error")
+	}
+
+	h.reopenDB()
+	h.put("c", "3")
+	h.getVal("a", "1")
+	h.getVal("c", "3")
+}
+
+// TestDB_JournalWriteErrorSkipsSequence ensures a write whose journal write
+// fails moves the sequence past it, so no later write reuses its numbers.
+func TestDB_JournalWriteErrorSkipsSequence(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+
+	h.put("a", "1")
+	seq := h.db.getSeq()
+
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeJournal, errors.New("journal write error"))
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); err == nil {
+		t.Fatal("put with a failing journal write: expected error")
+	}
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeJournal, nil)
+	if got := h.db.getSeq(); got != seq+1 {
+		t.Errorf("sequence %d after the failed write, want %d", got, seq+1)
+	}
+}
+
 // TestSessionManifestRebuildThrottled ensures a MANIFEST whose snapshot is
 // already over MaxManifestFileSize is rebuilt only once it has doubled since
 // its last rebuild, not on every commit, and that the grown MANIFEST still

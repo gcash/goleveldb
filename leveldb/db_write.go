@@ -27,7 +27,9 @@ func (db *DB) writeJournal(batches []*Batch, seq uint64, sync bool) error {
 		return err
 	}
 	if sync {
-		return db.journalWriter.Sync()
+		if err := db.journalWriter.Sync(); err != nil {
+			return &journalSyncError{err}
+		}
 	}
 	return nil
 }
@@ -152,6 +154,12 @@ func (db *DB) unlockWrite(overflow bool, merged int, err error) {
 
 // ourBatch is batch that we can modify.
 func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
+	// Writes stay stopped once a journal sync has failed.
+	if db.writeErr != nil {
+		db.unlockWrite(false, 0, db.writeErr)
+		return db.writeErr
+	}
+
 	// Try to flush memdb. This method would also trying to throttle writes
 	// if it is too fast and compaction cannot catch-up.
 	mdb, mdbFree, err := db.flush(batch.internalLen)
@@ -229,6 +237,15 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 
 	// Write journal.
 	if err := db.writeJournal(batches, seq, sync); err != nil {
+		// The batches may have reached the journal in part or in full, so
+		// skip their sequence numbers: no later batch may reuse them.
+		db.addSeq(uint64(batchesLen(batches)))
+		// After a failed sync the journal's state is unknown, so stop all
+		// writes until the DB is reopened, as LevelDB does.
+		if _, ok := err.(*journalSyncError); ok {
+			db.writeErr = err
+			db.logf("journal@write %v", err)
+		}
 		db.unlockWrite(overflow, merged, err)
 		return err
 	}

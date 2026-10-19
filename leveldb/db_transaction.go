@@ -312,6 +312,12 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 		return nil, ErrClosed
 	}
 
+	// Writes stay stopped once a journal sync has failed.
+	if db.writeErr != nil {
+		<-db.writeLockC
+		return nil, db.writeErr
+	}
+
 	if db.tr != nil {
 		panic("leveldb: has open transaction")
 	}
