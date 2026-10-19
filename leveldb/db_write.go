@@ -489,19 +489,22 @@ func (db *DB) SetReadOnly() error {
 	// Lock writer.
 	select {
 	case db.writeLockC <- struct{}{}:
-		db.compWriteLocking = true
 	case err := <-db.compPerErrC:
 		return err
 	case <-db.closeC:
 		return ErrClosed
 	}
 
-	// Set compaction read-only.
+	// Set compaction read-only, which hands the write lock over to the
+	// compaction error goroutine: it keeps the lock until Close, so writes
+	// stay refused. If that fails, release the lock, or Close blocks on it.
 	select {
 	case db.compErrSetC <- ErrReadOnly:
 	case perr := <-db.compPerErrC:
+		<-db.writeLockC
 		return perr
 	case <-db.closeC:
+		<-db.writeLockC
 		return ErrClosed
 	}
 

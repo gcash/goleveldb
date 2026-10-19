@@ -93,7 +93,11 @@ noerr:
 		case err = <-db.compErrSetC:
 			switch {
 			case err == nil:
-			case err == ErrReadOnly, errors.IsCorrupted(err), isWritesStopped(err):
+			case err == ErrReadOnly:
+				// SetReadOnly hands the write lock over with it.
+				db.compWriteLocking = true
+				goto hasperr
+			case errors.IsCorrupted(err), isWritesStopped(err):
 				goto hasperr
 			default:
 				goto haserr
@@ -111,7 +115,11 @@ haserr:
 			switch {
 			case err == nil:
 				goto noerr
-			case err == ErrReadOnly, errors.IsCorrupted(err), isWritesStopped(err):
+			case err == ErrReadOnly:
+				// SetReadOnly hands the write lock over with it.
+				db.compWriteLocking = true
+				goto hasperr
+			case errors.IsCorrupted(err), isWritesStopped(err):
 				goto hasperr
 			default:
 			}
