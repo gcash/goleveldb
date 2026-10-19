@@ -93,7 +93,7 @@ noerr:
 		case err = <-db.compErrSetC:
 			switch {
 			case err == nil:
-			case err == ErrReadOnly, errors.IsCorrupted(err):
+			case err == ErrReadOnly, errors.IsCorrupted(err), isWritesStopped(err):
 				goto hasperr
 			default:
 				goto haserr
@@ -111,7 +111,7 @@ haserr:
 			switch {
 			case err == nil:
 				goto noerr
-			case err == ErrReadOnly, errors.IsCorrupted(err):
+			case err == ErrReadOnly, errors.IsCorrupted(err), isWritesStopped(err):
 				goto hasperr
 			default:
 			}
@@ -182,9 +182,12 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 			db.logf("%s retrying N·%d", name, n)
 		}
 
-		// Execute.
+		// Execute, unless writes stopped, which stops compactions too.
 		cnt := compactionTransactCounter(0)
-		err := t.run(&cnt)
+		err := db.writesStopped()
+		if err == nil {
+			err = t.run(&cnt)
+		}
 		if err != nil {
 			db.logf("%s error I·%d %q", name, cnt, err)
 		}
@@ -206,6 +209,10 @@ func (db *DB) compactionTransact(name string, t compactionTransactInterface) {
 		}
 		if errors.IsCorrupted(err) {
 			db.logf("%s exiting (corruption detected)", name)
+			db.compactionExitTransact()
+		}
+		if isWritesStopped(err) {
+			db.logf("%s exiting (writes stopped)", name)
 			db.compactionExitTransact()
 		}
 
@@ -258,11 +265,25 @@ func (db *DB) compactionExitTransact() {
 	panic(errCompactionTransactExiting)
 }
 
+// compactionExitErr returns the error for the commands an exiting compaction
+// goroutine leaves unfinished: the error that stopped writes, or ErrClosed.
+func (db *DB) compactionExitErr() error {
+	if err := db.writesStopped(); err != nil {
+		return err
+	}
+	return ErrClosed
+}
+
 func (db *DB) compactionCommit(name string, rec *sessionRecord) {
 	db.compCommitLk.Lock()
 	defer db.compCommitLk.Unlock() // Defer is necessary.
 	db.compactionTransactFunc(name+"@commit", func(cnt *compactionTransactCounter) error {
-		return db.s.commit(rec, true)
+		if err := db.s.commit(rec, true); err != nil {
+			// The MANIFEST takes no more records, so rather than retry,
+			// stop writes and compactions until the DB is reopened.
+			return db.stopWrites(&writesStoppedError{"MANIFEST commit", err})
+		}
+		return nil
 	}, nil)
 }
 
@@ -688,11 +709,10 @@ type cAuto struct {
 	ackC chan<- error
 }
 
+// ack sends err to the waiter, if any. The channel has room for the one ack,
+// so ack never blocks, even when the waiter has stopped waiting.
 func (r cAuto) ack(err error) {
 	if r.ackC != nil {
-		defer func() {
-			_ = recover()
-		}()
 		r.ackC <- err
 	}
 }
@@ -703,11 +723,9 @@ type cRange struct {
 	ackC     chan<- error
 }
 
+// ack sends err to the waiter, as cAuto.ack does.
 func (r cRange) ack(err error) {
 	if r.ackC != nil {
-		defer func() {
-			_ = recover()
-		}()
 		r.ackC <- err
 	}
 }
@@ -722,8 +740,9 @@ func (db *DB) compTrigger(compC chan<- cCmd) {
 
 // This will trigger auto compaction and/or wait for all compaction to be done.
 func (db *DB) compTriggerWait(compC chan<- cCmd) (err error) {
-	ch := make(chan error)
-	defer close(ch)
+	// Room for the ack, which may come after an error ends the wait: a
+	// compaction that exits acks what it leaves unfinished.
+	ch := make(chan error, 1)
 	// Send cmd.
 	select {
 	case compC <- cAuto{ch}:
@@ -744,8 +763,8 @@ func (db *DB) compTriggerWait(compC chan<- cCmd) (err error) {
 
 // Send range compaction request.
 func (db *DB) compTriggerRange(compC chan<- cCmd, level int, min, max []byte) (err error) {
-	ch := make(chan error)
-	defer close(ch)
+	// Room for the ack, as in compTriggerWait.
+	ch := make(chan error, 1)
 	// Send cmd.
 	select {
 	case compC <- cRange{level, min, max, ch}:
@@ -774,7 +793,7 @@ func (db *DB) mCompaction() {
 			}
 		}
 		if x != nil {
-			x.ack(ErrClosed)
+			x.ack(db.compactionExitErr())
 		}
 		db.closeW.Done()
 	}()
@@ -808,12 +827,13 @@ func (db *DB) tCompaction() {
 				panic(x)
 			}
 		}
+		err := db.compactionExitErr()
 		for i := range waitQ {
-			waitQ[i].ack(ErrClosed)
+			waitQ[i].ack(err)
 			waitQ[i] = nil
 		}
 		if x != nil {
-			x.ack(ErrClosed)
+			x.ack(err)
 		}
 		db.closeW.Done()
 	}()

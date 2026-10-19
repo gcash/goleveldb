@@ -154,10 +154,10 @@ func (db *DB) unlockWrite(overflow bool, merged int, err error) {
 
 // ourBatch is batch that we can modify.
 func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
-	// Writes stay stopped once a journal sync has failed.
-	if db.writeErr != nil {
-		db.unlockWrite(false, 0, db.writeErr)
-		return db.writeErr
+	// Writes stay stopped after a failed journal sync or MANIFEST commit.
+	if err := db.writesStopped(); err != nil {
+		db.unlockWrite(false, 0, err)
+		return err
 	}
 
 	// Try to flush memdb. This method would also trying to throttle writes
@@ -241,10 +241,9 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 		// skip their sequence numbers: no later batch may reuse them.
 		db.addSeq(uint64(batchesLen(batches)))
 		// After a failed sync the journal's state is unknown, so stop all
-		// writes until the DB is reopened, as LevelDB does.
-		if _, ok := err.(*writesStoppedError); ok {
-			db.writeErr = err
-			db.logf("journal@write %v", err)
+		// writes until the DB is reopened.
+		if isWritesStopped(err) {
+			err = db.stopWrites(err)
 		}
 		db.unlockWrite(overflow, merged, err)
 		return err
@@ -424,6 +423,10 @@ func isMemOverlaps(icmp *iComparer, mem *memdb.DB, min, max []byte) bool {
 // Therefore if both is nil then it will compact entire DB.
 func (db *DB) CompactRange(r util.Range) error {
 	if err := db.ok(); err != nil {
+		return err
+	}
+	// Compactions stop along with writes.
+	if err := db.writesStopped(); err != nil {
 		return err
 	}
 

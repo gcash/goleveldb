@@ -62,6 +62,27 @@ func (db *DB) setSeq(seq uint64) {
 	atomic.StoreUint64(&db.seq, seq)
 }
 
+// writesStopped returns the error that stopped writes and compactions until
+// the DB is reopened, or nil.
+func (db *DB) writesStopped() error {
+	db.writeErrMu.Lock()
+	defer db.writeErrMu.Unlock()
+	return db.writeErr
+}
+
+// stopWrites stops writes and compactions until the DB is reopened, as
+// LevelDB does once what is on disk is unknown, and returns the error that
+// stopped them: err, unless they had already stopped.
+func (db *DB) stopWrites(err error) error {
+	db.writeErrMu.Lock()
+	defer db.writeErrMu.Unlock()
+	if db.writeErr == nil {
+		db.writeErr = err
+		db.logf("db@write %v", err)
+	}
+	return db.writeErr
+}
+
 func (db *DB) sampleSeek(ikey internalKey) {
 	v := db.s.version()
 	if v.sampleSeek(ikey) {

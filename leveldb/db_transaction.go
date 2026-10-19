@@ -9,7 +9,6 @@ package leveldb
 import (
 	"errors"
 	"sync"
-	"time"
 
 	"github.com/gcash/goleveldb/leveldb/iterator"
 	"github.com/gcash/goleveldb/leveldb/opt"
@@ -206,8 +205,8 @@ func (tr *Transaction) Commit() error {
 	if tr.closed {
 		return errTransactionDone
 	}
-	if tr.db.writeErr != nil {
-		return tr.db.writeErr
+	if err := tr.db.writesStopped(); err != nil {
+		return err
 	}
 	if err := tr.flush(); err != nil {
 		// Return error, lets user decide either to retry or discard
@@ -215,33 +214,16 @@ func (tr *Transaction) Commit() error {
 		return err
 	}
 	if len(tr.tables) != 0 {
-		// Committing transaction.
+		// Committing transaction. A failed MANIFEST commit is not retried,
+		// since the MANIFEST takes no more records until the DB is reopened.
 		tr.rec.setSeqNum(tr.seq)
 		tr.db.compCommitLk.Lock()
 		tr.stats.startTimer()
-		var cerr error
-		for retry := 0; retry < 3; retry++ {
-			cerr = tr.db.s.commit(&tr.rec, false)
-			if cerr != nil {
-				tr.db.logf("transaction@commit error R·%d %q", retry, cerr)
-				select {
-				case <-time.After(time.Second):
-				case <-tr.db.closeC:
-					tr.db.logf("transaction@commit exiting")
-					// The record may have reached the MANIFEST, so the
-					// tables must survive the discard on Close.
-					tr.keepTables = true
-					tr.db.compCommitLk.Unlock()
-					return cerr
-				}
-			} else {
-				// Success. Set db.seq.
-				tr.db.setSeq(tr.seq)
-				break
-			}
-		}
+		err := tr.db.s.commit(&tr.rec, false)
 		tr.stats.stopTimer()
-		if cerr != nil {
+		if err != nil {
+			tr.db.logf("transaction@commit error %q", err)
+
 			// Release the compaction commit lock, or every later commit
 			// and compaction blocks on it, and Close with them.
 			tr.db.compCommitLk.Unlock()
@@ -252,11 +234,12 @@ func (tr *Transaction) Commit() error {
 			// when the transaction is discarded: the next open keeps them
 			// if the MANIFEST lists them and removes them if not.
 			tr.db.setSeq(tr.seq)
-			tr.db.writeErr = &writesStoppedError{"MANIFEST commit", cerr}
 			tr.keepTables = true
-			tr.db.logf("transaction@commit %v", tr.db.writeErr)
-			return tr.db.writeErr
+			return tr.db.stopWrites(&writesStoppedError{"MANIFEST commit", err})
 		}
+
+		// Success. Set db.seq.
+		tr.db.setSeq(tr.seq)
 
 		// Update compaction stats. This is safe as long as we hold compCommitLk.
 		tr.db.compStats.addStat(0, &tr.stats)
@@ -337,10 +320,10 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 		return nil, ErrClosed
 	}
 
-	// Writes stay stopped once a journal sync has failed.
-	if db.writeErr != nil {
+	// Writes stay stopped after a failed journal sync or MANIFEST commit.
+	if err := db.writesStopped(); err != nil {
 		<-db.writeLockC
-		return nil, db.writeErr
+		return nil, err
 	}
 
 	if db.tr != nil {

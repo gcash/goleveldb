@@ -32,3 +32,8 @@ func (e *writesStoppedError) Error() string {
 }
 
 func (e *writesStoppedError) Unwrap() error { return e.err }
+
+func isWritesStopped(err error) bool {
+	_, ok := err.(*writesStoppedError)
+	return ok
+}

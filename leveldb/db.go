@@ -68,7 +68,8 @@ type DB struct {
 	writeMergedC chan bool
 	writeLockC   chan struct{}
 	writeAckC    chan error
-	writeErr     error // stops every later write; set and read under the write lock
+	writeErrMu   sync.Mutex
+	writeErr     error // stops every later write and compaction; under writeErrMu
 	writeDelay   time.Duration
 	writeDelayN  int
 	tr           *Transaction

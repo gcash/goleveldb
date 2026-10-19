@@ -1519,8 +1519,8 @@ func TestDB_ManifestWriteError(t *testing.T) {
 }
 
 // TestDB_TransactionManifestWriteError ensures a transaction whose commit
-// fails to write the manifest releases the compaction commit lock, so a later
-// compaction and Close return instead of blocking on it.
+// fails to write the manifest releases the compaction commit lock, which a
+// compaction under way takes before it stops, and Close waits for it.
 func TestDB_TransactionManifestWriteError(t *testing.T) {
 	h := newDbHarness(t)
 	defer h.close()
@@ -1543,10 +1543,15 @@ func TestDB_TransactionManifestWriteError(t *testing.T) {
 	}
 	tr.Discard()
 
-	// A compaction commits to the manifest under the same lock. The manifest
-	// writer keeps its error, so the compaction fails, but it must return.
+	// Compactions stop along with writes. One that reaches its commit takes
+	// the commit lock before it sees that, so the lock must be free, and
+	// manifestSize takes it.
+	size := h.manifestSize()
 	if err := h.db.CompactRange(util.Range{}); err == nil {
 		t.Error("CompactRange: expected error")
+	}
+	if got := h.manifestSize(); got != size {
+		t.Errorf("MANIFEST grew from %d to %d bytes after the failed commit", size, got)
 	}
 
 	h.db.Close()
@@ -1681,11 +1686,54 @@ func TestDB_LargeWriteCommitErrorReleasesWriteLock(t *testing.T) {
 	}
 }
 
+// TestDB_CompactionManifestErrorStopsWrites ensures a compaction whose
+// MANIFEST commit fails stops every later write and transaction until the DB
+// is reopened, as LevelDB does. The compaction used to retry for good while
+// holding the commit lock, so the next transaction waited on the lock, and
+// every later write behind it.
+func TestDB_CompactionManifestErrorStopsWrites(t *testing.T) {
+	h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB})
+	defer h.close()
+
+	h.put("a", "1")
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, errors.New("manifest write error"))
+	// Flushes the memdb, whose commit fails.
+	if err := h.db.CompactRange(util.Range{}); !isWritesStopped(err) {
+		t.Fatalf("CompactRange with a failing MANIFEST = %v, want writes stopped", err)
+	}
+	h.stor.EmulateError(testutil.ModeWrite, storage.TypeManifest, nil)
+
+	// A Write large enough to run as a transaction, then a Put.
+	batch := new(Batch)
+	batch.Put([]byte("big"), bytes.Repeat([]byte{'x'}, 128*opt.KiB))
+	if err := h.db.Write(batch, nil); !isWritesStopped(err) {
+		t.Errorf("large write after a failed MANIFEST commit = %v, want writes stopped", err)
+	}
+	if err := h.db.Put([]byte("b"), []byte("2"), nil); !isWritesStopped(err) {
+		t.Errorf("put after a failed MANIFEST commit = %v, want writes stopped", err)
+	}
+
+	// Close reports the stop. The reopened DB replays the journal that the
+	// failed flush kept.
+	h.db.Close()
+	h.openDB()
+	h.getVal("a", "1")
+	h.put("b", "2")
+	h.getVal("b", "2")
+}
+
+// manifestSize returns the size of the current MANIFEST.
+func (h *dbHarness) manifestSize() int64 {
+	h.db.compCommitLk.Lock()
+	defer h.db.compCommitLk.Unlock()
+	return h.db.s.manifest.Size()
+}
+
 // TestDB_TransactionManifestErrorStopsWrites ensures a transaction whose
 // MANIFEST commit fails moves the sequence to its own and stops every later
-// write until the DB is reopened, and that discarding it keeps its tables,
-// which the MANIFEST may list if the record reached the disk. The next open
-// keeps them if it does and removes them if not.
+// write and compaction until the DB is reopened, and that discarding it keeps
+// its tables, which the MANIFEST may list if the record reached the disk. The
+// next open keeps them if it does and removes them if not.
 func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
 	for _, test := range []struct {
 		name     string
@@ -1751,8 +1799,18 @@ func TestDB_TransactionManifestErrorStopsWrites(t *testing.T) {
 				t.Error("transaction after a failed MANIFEST commit: expected error")
 			}
 
-			h.db.Close()
+			// Compactions stop too, and append nothing to the MANIFEST,
+			// even once it takes writes again.
 			h.stor.EmulateError(test.mode, storage.TypeManifest, nil)
+			size := h.manifestSize()
+			if err := h.db.CompactRange(util.Range{}); !isWritesStopped(err) {
+				t.Fatalf("CompactRange after a failed MANIFEST commit = %v, want writes stopped", err)
+			}
+			if got := h.manifestSize(); got != size {
+				t.Errorf("MANIFEST grew from %d to %d bytes after the failed commit", size, got)
+			}
+
+			h.db.Close()
 			h.openDB()
 			h.getVal("a", "1")
 			if test.recorded {
@@ -1900,6 +1958,44 @@ func TestSessionManifestRotationKeepsRecord(t *testing.T) {
 	if len(v.levels) < 2 || len(v.levels[0]) != 1 || len(v.levels[1]) != 1 {
 		t.Errorf("recovered tables per level %v, want one at level 0 and one at level 1",
 			v.levels)
+	}
+}
+
+// TestSessionManifestSyncErrorStopsCommits ensures that once a MANIFEST sync
+// fails, nothing more is appended to the MANIFEST: the failed record may be
+// torn on disk, and the next open drops whatever follows a torn record in its
+// block, which would lose a later commit that reported success.
+func TestSessionManifestSyncErrorStopsCommits(t *testing.T) {
+	gomega.RegisterTestingT(t)
+	stor := testutil.NewStorage()
+	stor.OnLog(testingLogger(t))
+	defer stor.Close()
+	s, err := newSession(stor, &opt.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+
+	stor.EmulateError(testutil.ModeSync, storage.TypeManifest, errors.New("manifest sync error"))
+	rec := &sessionRecord{}
+	rec.setSeqNum(1)
+	if err := s.commit(rec, false); err == nil {
+		t.Fatal("commit with a failing MANIFEST sync: expected error")
+	}
+	stor.EmulateError(testutil.ModeSync, storage.TypeManifest, nil)
+
+	size := s.manifest.Size()
+	rec = &sessionRecord{}
+	rec.setSeqNum(2)
+	if err := s.commit(rec, false); err == nil {
+		t.Error("commit after a failed MANIFEST sync: expected error")
+	}
+	if got := s.manifest.Size(); got != size {
+		t.Errorf("MANIFEST grew from %d to %d bytes after the failed sync", size, got)
 	}
 }
 

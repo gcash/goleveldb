@@ -65,6 +65,10 @@ type session struct {
 
 	baseManifestSize int64 // manifest file size since last build
 
+	// manifestErr is the error of the first failed commit, after which the
+	// MANIFEST takes no more records; need external synchronization.
+	manifestErr error
+
 	// Testing fields
 	fileRefCh chan chan map[int64]int // channel used to pass current reference stat
 }
@@ -223,6 +227,13 @@ func (s *session) shouldRebuildManifest() bool {
 
 // Commit session; need external synchronization.
 func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
+	// A failed commit can leave a torn record at the end of the MANIFEST, and
+	// the next open drops whatever follows one in its block. So once a commit
+	// fails, nothing more is appended until the DB is reopened.
+	if s.manifestErr != nil {
+		return s.manifestErr
+	}
+
 	v := s.version()
 	defer v.release()
 
@@ -258,6 +269,8 @@ func (s *session) commit(r *sessionRecord, trivial bool) (err error) {
 	// finally, apply new version if no error rise
 	if err == nil {
 		s.setVersion(r, nv)
+	} else {
+		s.manifestErr = err
 	}
 
 	return
