@@ -416,8 +416,10 @@ type Options struct {
 	FilterBaseLg int
 
 	// MaxManifestFileSize is the maximum size limit of the MANIFEST-****** file.
-	// When the MANIFEST-****** file grows beyond this size, LevelDB will create
-	// a new MANIFEST file.
+	// When the MANIFEST-****** file grows beyond this size, and has also at
+	// least doubled in size since it was created, LevelDB will create a new
+	// MANIFEST file. The doubling keeps a database whose new MANIFEST is
+	// already over the limit from rewriting it on every commit.
 	//
 	// The default value is 64 MiB.
 	MaxManifestFileSize int64

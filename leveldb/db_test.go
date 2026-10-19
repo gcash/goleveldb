@@ -1555,6 +1555,59 @@ func TestDB_TransactionManifestWriteError(t *testing.T) {
 	h.getVal("foo", "bar")
 }
 
+// TestSessionManifestRebuildThrottled ensures a MANIFEST whose snapshot is
+// already over MaxManifestFileSize is rebuilt only once it has doubled since
+// its last rebuild, not on every commit, and that the grown MANIFEST still
+// recovers.
+func TestSessionManifestRebuildThrottled(t *testing.T) {
+	stor := storage.NewMemStorage()
+	defer stor.Close()
+	o := &opt.Options{MaxManifestFileSize: 1}
+	s, err := newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.create(); err != nil {
+		t.Fatal(err)
+	}
+
+	const commits = 50
+	base := s.manifest.Size()
+	rebuilds := 0
+	for i := 1; i <= commits; i++ {
+		fd, size := s.manifestFd, s.manifest.Size()
+		rec := &sessionRecord{}
+		rec.setSeqNum(uint64(i))
+		if err := s.commit(rec, false); err != nil {
+			t.Fatal(err)
+		}
+		if s.manifestFd == fd {
+			continue
+		}
+		if size < 2*base {
+			t.Fatalf("commit %d rebuilt a %d byte MANIFEST, %d bytes after its last rebuild",
+				i, size, base)
+		}
+		rebuilds++
+		base = s.manifest.Size()
+	}
+	if rebuilds == 0 {
+		t.Fatal("the MANIFEST was never rebuilt")
+	}
+	s.close()
+	s.release()
+
+	s, err = newSession(stor, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.release()
+	defer s.close()
+	if err := s.recover(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func assertErr(t *testing.T, err error, wanterr bool) {
 	if err != nil {
 		if wanterr {
