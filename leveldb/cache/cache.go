@@ -552,7 +552,7 @@ func (r *Cache) Get(ns, key uint64, setFunc func() (size int, value Value)) *Han
 						return nil
 					}
 
-					n.size, n.value = setFunc()
+					n.setValue(setFunc)
 					if n.value == nil {
 						n.size = 0
 						n.mu.Unlock()
@@ -729,10 +729,10 @@ type Node struct {
 	hash    uint32
 	ns, key uint64
 
-	mu        sync.Mutex
-	size      int
-	value     Value
-	finalized bool // under mu
+	mu    sync.Mutex
+	size  int
+	value Value
+	once  sync.Once // finalization; see finalize
 
 	ref      int32
 	delFuncs []func()
@@ -773,26 +773,42 @@ func (n *Node) GetHandle() *Handle {
 	return &Handle{unsafe.Pointer(n)}
 }
 
+// setValue sets the node's value with setFunc, with n locked. If setFunc
+// panics, it clears and unlocks the node and drops the caller's reference
+// before the panic goes on: a node left locked hung every later Get of its
+// key, and Close(true), since finalize takes the lock.
+func (n *Node) setValue(setFunc func() (size int, value Value)) {
+	ok := false
+	defer func() {
+		if !ok {
+			n.size, n.value = 0, nil
+			n.mu.Unlock()
+			n.unRefInternal(false)
+		}
+	}()
+	n.size, n.value = setFunc()
+	ok = true
+}
+
 // finalize releases the node's value and returns its delete funcs for the
 // caller to call, once however often it is called: Close(true) and the
-// release of the node's last handle can finalize it at the same time. It
-// leaves the value in place, since a handle held across Close(true) may still
-// read it, without a lock; a released value reports its own error.
-func (n *Node) finalize() []func() {
-	n.mu.Lock()
-	if n.finalized {
+// release of the node's last handle can finalize it at the same time. A later
+// call waits until the first has released the value, so that Close(true)
+// returns only once every value is released. It leaves the value in place,
+// since a handle held across Close(true) may still read it, without a lock;
+// a released value reports its own error.
+func (n *Node) finalize() (delFuncs []func()) {
+	n.once.Do(func() {
+		n.mu.Lock()
+		value := n.value
+		delFuncs, n.delFuncs = n.delFuncs, nil
 		n.mu.Unlock()
-		return nil
-	}
-	n.finalized = true
-	value, delFuncs := n.value, n.delFuncs
-	n.delFuncs = nil
-	n.mu.Unlock()
 
-	// Call releaser.
-	if r, ok := value.(util.Releaser); ok {
-		r.Release()
-	}
+		// Call releaser.
+		if r, ok := value.(util.Releaser); ok {
+			r.Release()
+		}
+	})
 	return delFuncs
 }
 

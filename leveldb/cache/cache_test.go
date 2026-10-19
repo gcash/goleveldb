@@ -653,3 +653,27 @@ func TestCacheCloseDuringGetThatEvicts(t *testing.T) {
 	}
 	<-closed
 }
+
+// TestCacheGetPanickingSetFunc ensures a setFunc that panics, with the panic
+// recovered by Get's caller, leaves no node behind locked: a later Get of the
+// key calls setFunc again, and Close(true) returns. The node stayed in the
+// cache with its lock held, so every later Get of the key hung, and so did
+// Close(true), since finalizing a node takes its lock.
+func TestCacheGetPanickingSetFunc(t *testing.T) {
+	c := NewCache(NewLRU(10))
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("Get with a panicking setFunc did not panic")
+			}
+		}()
+		c.Get(0, 1, func() (int, Value) { panic("setFunc panic") })
+	}()
+
+	h := c.Get(0, 1, func() (int, Value) { return 1, "v" })
+	if h == nil || h.Value() != "v" {
+		t.Fatalf("Get after a panicking setFunc = %v, want a handle on the new value", h)
+	}
+	h.Release()
+	c.Close(true)
+}
