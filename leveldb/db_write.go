@@ -67,6 +67,17 @@ retry:
 	return
 }
 
+// rotateMemOnly rotates the memdb for a caller that writes nothing to the new
+// one, dropping the reference rotateMem takes for it, error or not: a memdb
+// that keeps it never goes back to the pool.
+func (db *DB) rotateMemOnly(wait bool) error {
+	mem, err := db.rotateMem(0, wait)
+	if mem != nil {
+		mem.decref()
+	}
+	return err
+}
+
 func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 	delayed := false
 	slowdownTrigger := db.s.o.GetWriteL0SlowdownTrigger()
@@ -99,6 +110,9 @@ func (db *DB) flush(n int) (mdb *memDB, mdbFree int, err error) {
 			// Unset the write paused flag.
 			atomic.StoreInt32(&db.inWritePaused, 0)
 			if err != nil {
+				// The caller releases the memdb only on success.
+				mdb.decref()
+				mdb = nil
 				return false
 			}
 		default:
@@ -274,7 +288,7 @@ func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
 	// now, so a failed rotation is not their failure: the next write that
 	// needs room retries it before writing anything.
 	if batch.internalLen >= mdbFree {
-		if _, err := db.rotateMem(0, false); err != nil {
+		if err := db.rotateMemOnly(false); err != nil {
 			db.logf("memdb@rotate after a write failed %q", err)
 		}
 	}
@@ -464,7 +478,7 @@ func (db *DB) CompactRange(r util.Range) error {
 	defer mdb.decref()
 	if isMemOverlaps(db.s.icmp, mdb.DB, r.Start, r.Limit) {
 		// Memdb compaction.
-		if _, err := db.rotateMem(0, false); err != nil {
+		if err := db.rotateMemOnly(false); err != nil {
 			<-db.writeLockC
 			return err
 		}

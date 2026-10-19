@@ -375,7 +375,7 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 	// transaction's. On an error, release the write lock, or every later
 	// write and Close block on it.
 	if db.mem != nil && db.mem.Len() != 0 {
-		if _, err := db.rotateMem(0, true); err != nil {
+		if err := db.rotateMemOnly(true); err != nil {
 			<-db.writeLockC
 			return nil, err
 		}

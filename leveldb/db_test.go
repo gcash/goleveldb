@@ -378,7 +378,7 @@ func (h *dbHarness) compactMem() {
 		<-db.writeLockC
 	}()
 
-	if _, err := db.rotateMem(0, true); err != nil {
+	if err := db.rotateMemOnly(true); err != nil {
 		t.Error("compaction error: ", err)
 	}
 
@@ -2871,6 +2871,76 @@ func TestDB_WriteLandsWhenRotationAfterItFails(t *testing.T) {
 	h.reopenDB()
 	h.getVal("big", big)
 	h.getVal("a", "1")
+}
+
+// TestDB_RotationsLeaveNoExtraMemdbRef ensures each memdb rotation leaves the
+// current memdb holding only its own reference, so that it goes back to the
+// pool once flushed. Callers that wrote nothing to the new memdb kept the
+// reference rotateMem took for them, and a write the L0 pause failed kept its
+// own, so those memdbs were never reused.
+func TestDB_RotationsLeaveNoExtraMemdbRef(t *testing.T) {
+	checkRefs := func(t *testing.T, db *DB) {
+		t.Helper()
+		m := db.getEffectiveMem()
+		refs := m.getref() - 1
+		m.decref()
+		if refs != 1 {
+			t.Errorf("references on the current memdb: %d, want 1, its own", refs)
+		}
+	}
+
+	t.Run("rotation after a write", func(t *testing.T) {
+		h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB})
+		defer h.close()
+		h.put("big", strings.Repeat("x", 128*opt.KiB))
+		checkRefs(t, h.db)
+	})
+
+	t.Run("CompactRange", func(t *testing.T) {
+		h := newDbHarnessWopt(t, &opt.Options{})
+		defer h.close()
+		h.put("a", "1")
+		h.compactRange("", "")
+		checkRefs(t, h.db)
+	})
+
+	t.Run("OpenTransaction", func(t *testing.T) {
+		h := newDbHarnessWopt(t, &opt.Options{})
+		defer h.close()
+		h.put("a", "1")
+		tr, err := h.db.OpenTransaction()
+		if err != nil {
+			t.Fatal("OpenTransaction: got error: ", err)
+		}
+		tr.Discard()
+		checkRefs(t, h.db)
+	})
+
+	t.Run("write paused by L0", func(t *testing.T) {
+		h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB, WriteL0PauseTrigger: 1})
+		defer h.close()
+		// One L0 table pauses a write that needs room.
+		h.put("a", "1")
+		h.compactMem()
+		// Fail a memdb flush, so that the pause's wait returns its error.
+		h.put("b", "2")
+		h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, errors.New("table write error"))
+		h.db.writeLockC <- struct{}{}
+		mem, err := h.db.rotateMem(0, false)
+		<-h.db.writeLockC
+		if err != nil {
+			t.Fatal("rotateMem: got error: ", err)
+		}
+		mem.decref()
+		if err := h.db.Put([]byte("big"), bytes.Repeat([]byte{'x'}, 100*opt.KiB), nil); err == nil {
+			t.Error("put paused by L0 while a flush fails: expected the flush's error")
+		}
+		checkRefs(t, h.db)
+		h.stor.EmulateError(testutil.ModeWrite, storage.TypeTable, nil)
+		// Close reports the flush's error, which the harness would take for
+		// a failure.
+		_ = h.db.Close()
+	})
 }
 
 // TestDB_NewRawIteratorAfterClose ensures an iterator built once Close has
