@@ -29,6 +29,7 @@ import (
 	"github.com/gcash/goleveldb/leveldb/errors"
 	"github.com/gcash/goleveldb/leveldb/filter"
 	"github.com/gcash/goleveldb/leveldb/iterator"
+	"github.com/gcash/goleveldb/leveldb/journal"
 	"github.com/gcash/goleveldb/leveldb/opt"
 	"github.com/gcash/goleveldb/leveldb/storage"
 	"github.com/gcash/goleveldb/leveldb/testutil"
@@ -2076,6 +2077,75 @@ func TestSessionCommitKeepsHighestSequence(t *testing.T) {
 	}
 	if s.stSeqNum != 10 {
 		t.Errorf("recovered sequence %d, want 10", s.stSeqNum)
+	}
+}
+
+// TestRecoverManifestListsTablesFirst ensures the MANIFEST that Recover
+// writes lists the recovered tables in its first record, since CURRENT names
+// the MANIFEST as soon as that record is written. Recover used to write an
+// empty snapshot first and the tables in a second record. If that record
+// never reached the disk, the next open found no tables and deleted them all.
+func TestRecoverManifestListsTablesFirst(t *testing.T) {
+	dir := t.TempDir()
+	db, err := OpenFile(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if err := db.Put([]byte(fmt.Sprintf("k%d", i)), []byte("v"), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.CompactRange(util.Range{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = RecoverFile(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cut the MANIFEST back to its first record, as a crash right after
+	// Recover wrote it would leave it. A record that fits in one block takes
+	// a 7-byte header and its payload.
+	current, err := os.ReadFile(filepath.Join(dir, "CURRENT"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := filepath.Join(dir, strings.TrimSpace(string(current)))
+	f, err := os.Open(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := journal.NewReader(f, nil, true, true).Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first bytes.Buffer
+	if _, err := first.ReadFrom(r); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := os.Truncate(manifest, int64(7+first.Len())); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = OpenFile(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("k%d", i)
+		if _, err := db.Get([]byte(key), nil); err != nil {
+			t.Errorf("get %s after a crash right after Recover: %v", key, err)
+		}
 	}
 }
 

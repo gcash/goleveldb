@@ -480,13 +480,22 @@ func recoverTable(s *session, o *opt.Options) error {
 	// Set sequence number.
 	rec.setSeqNum(maxSeq)
 
-	// Create new manifest.
-	if err := s.create(); err != nil {
+	// Write the recovered tables in the new MANIFEST's first record, as
+	// LevelDB's RepairDB does. CURRENT names the MANIFEST as soon as that
+	// record is written, so tables in a later record that never reached the
+	// disk would leave it naming a MANIFEST without them, and the next open
+	// would delete them all. The snapshot takes the session's sequence, so
+	// that is set first.
+	v := s.version()
+	nv := v.spawn(rec, false)
+	v.release()
+	s.recordCommited(rec)
+	if err := s.newManifest(nil, nv); err != nil {
+		s.abandon <- nv.id
 		return err
 	}
-
-	// Commit.
-	return s.commit(rec, false)
+	s.setVersion(rec, nv)
+	return nil
 }
 
 func (db *DB) recoverJournal() error {
