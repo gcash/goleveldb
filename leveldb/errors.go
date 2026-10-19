@@ -18,11 +18,12 @@ var (
 	ErrIterReleased     = errors.New("leveldb: iterator released")
 	ErrClosed           = errors.New("leveldb: closed")
 
-	// ErrWritesStopped is matched, through errors.Is, by the error every write,
-	// transaction and compaction returns once a journal write or sync, or a
-	// MANIFEST commit, has failed. What reached the disk is then unknown, so
-	// the DB takes no more writes until it is reopened, as LevelDB does.
-	// Reads keep working.
+	// ErrWritesStopped is matched, through errors.Is, by the error writes,
+	// transactions, compactions, SetReadOnly and Close return once a journal
+	// write, sync or rotation, or a MANIFEST commit, has failed. What reached
+	// the disk is then unknown, so the DB takes no more writes until it is
+	// reopened. LevelDB stops the same way, except after a failed journal
+	// write, which it only returns to the writes involved. Reads keep working.
 	ErrWritesStopped = errors.New("leveldb: writes stopped until reopened")
 )
 
@@ -30,9 +31,9 @@ var (
 // sequence number the DB can use.
 var errSeqExhausted = errors.New("leveldb: sequence numbers exhausted")
 
-// writesStoppedError reports a failure that leaves what is on disk unknown, a
-// journal sync or a MANIFEST commit, after which the DB stops all writes until
-// it is reopened.
+// writesStoppedError reports a failure that leaves what is on disk unknown, of
+// a journal write, sync or rotation, or a MANIFEST commit, after which the DB
+// stops all writes until it is reopened.
 type writesStoppedError struct {
 	what string
 	err  error

@@ -351,7 +351,7 @@ func (db *DB) OpenTransaction() (*Transaction, error) {
 		return nil, ErrClosed
 	}
 
-	// Writes stay stopped after a failed journal sync or MANIFEST commit.
+	// Once writes have stopped, they stay stopped until the DB is reopened.
 	if err := db.writesStopped(); err != nil {
 		<-db.writeLockC
 		return nil, err

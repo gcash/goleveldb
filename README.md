@@ -18,13 +18,14 @@ declare the module path it replaces.
 
 Besides bug fixes, the behavior differs from syndtr/goleveldb in these ways:
 
-- After a failed journal write or sync, or a failed MANIFEST commit, writes
-  and compactions stop until the DB is reopened, as in LevelDB, and their
-  errors match `leveldb.ErrWritesStopped`. Reads keep working.
+- After a failed journal write, sync or rotation, or a failed MANIFEST
+  commit, writes and compactions stop until the DB is reopened, and their
+  errors match `leveldb.ErrWritesStopped`, as does the error `Close` then
+  returns. Reads keep working. LevelDB stops the same way, except after a
+  failed journal write.
 - Journal recovery replays every batch, even those below the MANIFEST's
   sequence, and always verifies checksums, as LevelDB does.
   `opt.StrictJournalChecksum` no longer has any effect.
-- `Recover` replays every journal file present, as LevelDB's RepairDB does.
 
 ## Requirements
 

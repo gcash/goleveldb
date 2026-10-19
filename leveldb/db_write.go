@@ -156,7 +156,7 @@ func (db *DB) unlockWrite(overflow bool, merged int, err error) {
 
 // ourBatch is batch that we can modify.
 func (db *DB) writeLocked(batch, ourBatch *Batch, merge, sync bool) error {
-	// Writes stay stopped after a failed journal sync or MANIFEST commit.
+	// Once writes have stopped, they stay stopped until the DB is reopened.
 	if err := db.writesStopped(); err != nil {
 		db.unlockWrite(false, 0, err)
 		return err
