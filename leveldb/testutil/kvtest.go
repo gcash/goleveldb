@@ -135,14 +135,13 @@ func KeyValueTesting(rnd *rand.Rand, kv KeyValue, p DB, setup func(KeyValue) DB,
 		}
 	})
 
-	ginkgo.It("Should iterates and seeks correctly", func(done ginkgo.Done) {
+	ginkgo.It("Should iterates and seeks correctly", func() {
 		if db, ok := p.(NewIterator); ok {
 			TestIter(db, nil, kv.Clone())
 		}
-		done <- true
-	}, 30.0)
+	})
 
-	ginkgo.It("Should iterates and seeks slice correctly", func(done ginkgo.Done) {
+	ginkgo.It("Should iterates and seeks slice correctly", func() {
 		if db, ok := p.(NewIterator); ok {
 			RandomIndex(rnd, kv.Len(), Min(kv.Len(), 50), func(i int) {
 				type slice struct {
@@ -161,10 +160,9 @@ func KeyValueTesting(rnd *rand.Rand, kv KeyValue, p DB, setup func(KeyValue) DB,
 				}
 			})
 		}
-		done <- true
-	}, 200.0)
+	})
 
-	ginkgo.It("Should iterates and seeks slice correctly", func(done ginkgo.Done) {
+	ginkgo.It("Should iterates and seeks slice correctly", func() {
 		if db, ok := p.(NewIterator); ok {
 			RandomRange(rnd, kv.Len(), Min(kv.Len(), 50), func(start, limit int) {
 				ginkgo.By(fmt.Sprintf("Random range of %d .. %d", start, limit), func() {
@@ -173,8 +171,7 @@ func KeyValueTesting(rnd *rand.Rand, kv KeyValue, p DB, setup func(KeyValue) DB,
 				})
 			})
 		}
-		done <- true
-	}, 200.0)
+	})
 }
 
 func AllKeyValueTesting(rnd *rand.Rand, body, setup func(KeyValue) DB, teardown func(DB)) {

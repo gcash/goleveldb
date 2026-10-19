@@ -26,7 +26,7 @@ var _ = testutil.Defer(func() {
 	Describe("Merged iterator", func() {
 		Test := func(filled int, empty int) func() {
 			return func() {
-				It("Should iterates and seeks correctly", func(done Done) {
+				It("Should iterates and seeks correctly", func() {
 					rnd := testutil.NewRand()
 
 					// Build key/value.
@@ -55,8 +55,7 @@ var _ = testutil.Defer(func() {
 						Iter:     NewMergedIterator(iters, comparer.DefaultComparer, true),
 					}
 					testutil.DoIteratorTesting(&t)
-					done <- true
-				}, 15.0)
+				})
 			}
 		}
 

@@ -45,7 +45,7 @@ var _ = testutil.Defer(func() {
 			}
 
 			return func() {
-				It("Should iterates and seeks correctly", func(done Done) {
+				It("Should iterates and seeks correctly", func() {
 					// Build key/value.
 					index := make(keyValueIndex, len(n))
 					sum := 0
@@ -68,8 +68,7 @@ var _ = testutil.Defer(func() {
 						Iter:     NewIndexedIterator(NewArrayIndexer(index), true),
 					}
 					testutil.DoIteratorTesting(&t)
-					done <- true
-				}, 15.0)
+				})
 			}
 		}
 

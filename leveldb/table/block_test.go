@@ -111,8 +111,8 @@ var _ = testutil.Defer(func() {
 					// Make block.
 					bt := Build(kv, restartInterval)
 
-					Test := func(r *util.Range) func(done Done) {
-						return func(done Done) {
+					Test := func(r *util.Range) func() {
+						return func() {
 							iter := bt.TestNewIterator(r)
 							Expect(iter.Error()).ShouldNot(HaveOccurred())
 
@@ -123,15 +123,14 @@ var _ = testutil.Defer(func() {
 
 							testutil.DoIteratorTesting(&t)
 							iter.Release()
-							done <- true
 						}
 					}
 
 					It("Should do iterations and seeks correctly #0",
-						Test(&util.Range{Start: []byte("k0"), Limit: []byte("k6")}), 2.0)
+						Test(&util.Range{Start: []byte("k0"), Limit: []byte("k6")}))
 
 					It("Should do iterations and seeks correctly #1",
-						Test(&util.Range{Start: []byte(""), Limit: []byte("zzzzzzz")}), 2.0)
+						Test(&util.Range{Start: []byte(""), Limit: []byte("zzzzzzz")}))
 				})
 			}
 		})

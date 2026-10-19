@@ -28,7 +28,7 @@ var _ = testutil.Defer(func() {
 		}
 
 		Describe("write test", func() {
-			It("should do write correctly", func(done Done) {
+			It("should do write correctly", func() {
 				db := newTestingDB(o, nil, nil)
 				t := testutil.DBTesting{
 					DB:      db,
@@ -36,8 +36,7 @@ var _ = testutil.Defer(func() {
 				}
 				testutil.DoDBTesting(&t)
 				db.TestClose()
-				done <- true
-			}, 80.0)
+			})
 		})
 
 		Describe("read test", func() {
@@ -56,7 +55,7 @@ var _ = testutil.Defer(func() {
 		})
 
 		Describe("transaction test", func() {
-			It("should do transaction correctly", func(done Done) {
+			It("should do transaction correctly", func() {
 				db := newTestingDB(o, nil, nil)
 
 				By("creating first transaction")
@@ -110,8 +109,7 @@ var _ = testutil.Defer(func() {
 				testutil.TestIter(db, nil, t0.Present)
 
 				db.TestClose()
-				done <- true
-			}, 240.0)
+			})
 		})
 	})
 })
