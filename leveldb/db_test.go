@@ -2730,6 +2730,38 @@ func TestDB_JournalRemoveErrorAtOpen(t *testing.T) {
 	}
 }
 
+// TestDB_JanitorRemovesTempFiles ensures an open removes temp files, which
+// only Recover writes, and leaves behind when renaming a rebuilt table over
+// the old one fails or it crashes mid-rebuild. The janitor kept every temp
+// file for good.
+func TestDB_JanitorRemovesTempFiles(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+	h.put("a", "1")
+	h.closeDB()
+
+	w, err := h.stor.Create(storage.FileDesc{Type: storage.TypeTemp, Num: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("half a rebuilt table")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	h.openDB()
+	temps, err := h.stor.List(storage.TypeTemp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(temps) != 0 {
+		t.Errorf("temp files after an open: %v, want none", temps)
+	}
+	h.getVal("a", "1")
+}
+
 // TestDB_CloseRemovesObsoleteTables ensures Close removes the tables that
 // compactions replaced, which the session may not have got to yet, as the
 // next open would. Recover reads every table present, so a replaced table left

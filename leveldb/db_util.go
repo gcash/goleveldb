@@ -73,6 +73,10 @@ func (db *DB) checkAndCleanFiles() error {
 				tmap[fd.Num] = true
 				nt++
 			}
+		case storage.TypeTemp:
+			// Only Recover writes temp files, and it is done with them
+			// before the open gets here.
+			keep = false
 		}
 
 		if !keep {
