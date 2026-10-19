@@ -2543,6 +2543,62 @@ func TestDB_WriteFailsPastMaxSequence(t *testing.T) {
 	}
 }
 
+// TestDB_NoStaleBlocksAfterDiscardedTransaction ensures a table created after
+// a transaction is discarded does not read the discarded tables' cached
+// blocks. The block cache keys blocks by file number and offset, and removing
+// a table handed its number to the next table without evicting its blocks, so
+// that table read the discarded values. With BlockCacheEvictRemoved the
+// number is still reused, once the blocks are evicted.
+func TestDB_NoStaleBlocksAfterDiscardedTransaction(t *testing.T) {
+	for _, evictRemoved := range []bool{false, true} {
+		t.Run(fmt.Sprintf("BlockCacheEvictRemoved=%v", evictRemoved), func(t *testing.T) {
+			h := newDbHarnessWopt(t, &opt.Options{WriteBuffer: 64 * opt.KiB, BlockCacheEvictRemoved: evictRemoved})
+			defer h.close()
+
+			const n = 100
+			key := func(i int) []byte { return []byte(fmt.Sprintf("k%03d", i)) }
+			value := func(v string) []byte { return []byte(v + strings.Repeat("x", opt.KiB)) }
+			write := func(tr *Transaction, v string) {
+				for i := 0; i < n; i++ {
+					if err := tr.Put(key(i), value(v), nil); err != nil {
+						t.Fatal("transaction put: got error: ", err)
+					}
+				}
+			}
+
+			// The discarded transaction flushes a table and reads it back,
+			// which puts the table's blocks in the cache.
+			tr, err := h.db.OpenTransaction()
+			if err != nil {
+				t.Fatal("OpenTransaction: got error: ", err)
+			}
+			write(tr, "old")
+			if len(tr.tables) == 0 {
+				t.Fatal("the discarded transaction flushed no table")
+			}
+			if _, err := tr.Get(key(0), nil); err != nil {
+				t.Fatal("transaction get: got error: ", err)
+			}
+			tr.Discard()
+
+			tr, err = h.db.OpenTransaction()
+			if err != nil {
+				t.Fatal("OpenTransaction: got error: ", err)
+			}
+			write(tr, "new")
+			if err := tr.Commit(); err != nil {
+				t.Fatal("Commit: got error: ", err)
+			}
+
+			for i := 0; i < n; i++ {
+				if v, err := h.db.Get(key(i), nil); err != nil || !bytes.Equal(v, value("new")) {
+					t.Fatalf("get %s after the discarded transaction = %.3q, %v; want new", key(i), v, err)
+				}
+			}
+		})
+	}
+}
+
 func assertErr(t *testing.T, err error, wanterr bool) {
 	if err != nil {
 		if wanterr {

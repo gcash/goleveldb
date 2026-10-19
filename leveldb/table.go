@@ -490,8 +490,12 @@ func (t *tOps) remove(fd storage.FileDesc) {
 		if t.evictRemoved && t.blockCache != nil {
 			t.blockCache.EvictNS(uint64(fd.Num))
 		}
-		// Try to reuse file num, useful for discarded transaction.
-		t.s.reuseFileNum(fd.Num)
+		// Try to reuse file num, useful for discarded transaction, but only
+		// once no cached block can outlive the table: blocks are cached by
+		// file number, so a new table with this number would read them.
+		if t.evictRemoved || t.blockCache == nil {
+			t.s.reuseFileNum(fd.Num)
+		}
 	})
 }
 
