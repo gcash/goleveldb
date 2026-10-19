@@ -31,17 +31,20 @@ func (mr *memdbReleaser) Release() {
 func (db *DB) newRawIterator(auxm *memDB, auxt tFiles, slice *util.Range, ro *opt.ReadOptions) iterator.Iterator {
 	strict := opt.GetStrict(db.s.o.Options, ro, opt.StrictReader)
 	em, fm := db.getMems()
-	if em == nil {
-		// Close has run since the caller checked, and cleared the memdbs.
-		if fm != nil {
-			fm.decref()
-		}
-		if auxm != nil {
-			auxm.decref()
+	v := db.s.version()
+	// Close may have run since the caller checked. Once it has closed the
+	// session, the last version lists no tables, and once it has cleared the
+	// memdbs, there is no live memdb: an iterator built from either would
+	// miss data without an error.
+	if em == nil || v.closing {
+		v.release()
+		for _, m := range []*memDB{em, fm, auxm} {
+			if m != nil {
+				m.decref()
+			}
 		}
 		return iterator.NewEmptyIterator(ErrClosed)
 	}
-	v := db.s.version()
 
 	tableIts := v.getIterators(slice, ro)
 	n := len(tableIts) + len(auxt) + 3

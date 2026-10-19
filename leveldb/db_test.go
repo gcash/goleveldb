@@ -2857,6 +2857,43 @@ func TestDB_NewRawIteratorAfterClose(t *testing.T) {
 	}
 }
 
+// closerFunc is an io.Closer that calls itself.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
+// TestDB_NewRawIteratorDuringClose ensures an iterator built while Close runs,
+// once it has closed the session but before it clears the memdbs, reports
+// ErrClosed. The session's last version lists no tables, so the iterator saw
+// only the memdbs and reported no error, silently missing every key held in a
+// table.
+func TestDB_NewRawIteratorDuringClose(t *testing.T) {
+	h := newDbHarness(t)
+	defer h.close()
+	h.put("b", "2")
+	h.compactMem()  // "b" is only in a table
+	h.put("a", "1") // "a" is only in the memdb
+
+	// Close calls the closer between closing the session and clearing the
+	// memdbs, where a NewIterator racing it, past its own check, can build
+	// its iterator.
+	var keys int
+	var iterErr error
+	h.db.closer = closerFunc(func() error {
+		iter := h.db.newRawIterator(nil, nil, nil, nil)
+		for iter.Next() {
+			keys++
+		}
+		iterErr = iter.Error()
+		iter.Release()
+		return nil
+	})
+	h.closeDB()
+	if keys != 0 || iterErr != ErrClosed {
+		t.Errorf("raw iterator during Close: %d keys, error %v; want none, %v", keys, iterErr, ErrClosed)
+	}
+}
+
 // TestDB_WriteFailsPastMaxSequence ensures a write whose sequence numbers
 // would pass what an internal key holds fails before it reaches the journal.
 // Recovery moves the sequence one past the last batch and rejects a batch
